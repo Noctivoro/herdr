@@ -51,7 +51,7 @@ async function sendRequest(request: unknown): Promise<void> {
   await sendRequestAttempt(request, 1500);
 }
 
-type AgentState = "working" | "blocked" | "idle";
+type AgentState = "working" | "blocked" | "idle" | "stale";
 
 type QueuedState = {
   state: AgentState;
@@ -60,6 +60,7 @@ type QueuedState = {
 };
 
 const idleDebounceMs = parseDurationEnv("HERDR_PI_IDLE_DEBOUNCE_MS", 250);
+const staleAfterIdleMs = parseDurationEnv("HERDR_PI_STALE_AFTER_IDLE_MS", 10 * 60 * 1000);
 const retryGraceMs = parseDurationEnv("HERDR_PI_RETRY_GRACE_MS", 2500);
 const retryableErrorPattern =
   /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i;
@@ -241,11 +242,13 @@ export default function (pi) {
   let retryHoldActive = false;
   let failureBlocked = false;
   let failureMessage: string | undefined;
+  let idleIsStale = false;
   let blockedCount = 0;
   let blockedMessage: string | undefined;
   let lastState: AgentState | undefined;
   let lastMessage: string | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let staleTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let rootSession = false;
 
@@ -257,9 +260,12 @@ export default function (pi) {
 
   function clearPendingTimers() {
     clearTimer(idleTimer);
+    clearTimer(staleTimer);
     clearTimer(retryTimer);
     idleTimer = undefined;
+    staleTimer = undefined;
     retryTimer = undefined;
+    idleIsStale = false;
   }
 
   function clearFailureState() {
@@ -278,6 +284,9 @@ export default function (pi) {
     if (agentActive || retryHoldActive) {
       return { state: "working" as const, message: undefined };
     }
+    if (idleIsStale) {
+      return { state: "stale" as const, message: undefined };
+    }
     return { state: "idle" as const, message: undefined };
   }
 
@@ -291,12 +300,30 @@ export default function (pi) {
     queueState(next.state, next.message);
   }
 
+  function scheduleStaleIfIdle() {
+    clearTimer(staleTimer);
+    staleTimer = undefined;
+    if (staleAfterIdleMs <= 0 || desiredState().state !== "idle") {
+      return;
+    }
+    staleTimer = setTimeout(() => {
+      staleTimer = undefined;
+      if (desiredState().state !== "idle") {
+        return;
+      }
+      idleIsStale = true;
+      publishState();
+    }, staleAfterIdleMs);
+    staleTimer.unref?.();
+  }
+
   function scheduleIdle() {
     clearPendingTimers();
     clearFailureState();
     idleTimer = setTimeout(() => {
       idleTimer = undefined;
       publishState();
+      scheduleStaleIfIdle();
     }, idleDebounceMs);
     idleTimer.unref?.();
   }
@@ -346,6 +373,7 @@ export default function (pi) {
     // A reload can replace this extension mid-run without emitting another agent_start.
     agentActive = ctx?.isIdle?.() === false;
     publishState(true);
+    scheduleStaleIfIdle();
   });
 
   pi.on("agent_start", (_event, ctx) => {

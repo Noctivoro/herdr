@@ -112,6 +112,7 @@ pub enum ClientWindowTitleReason {
 #[serde(rename_all = "snake_case")]
 pub enum PaneAgentState {
     Idle,
+    Stale,
     Working,
     Blocked,
     Unknown,
@@ -121,6 +122,7 @@ pub enum PaneAgentState {
 #[serde(rename_all = "snake_case")]
 pub enum AgentStatus {
     Idle,
+    Stale,
     Working,
     Blocked,
     Done,

@@ -11,6 +11,8 @@ pub mod manifest_update;
 pub enum AgentState {
     /// Agent finished, prompt visible, nothing happening.
     Idle,
+    /// Agent has been idle long enough to be stale.
+    Stale,
     /// Agent is actively working/processing.
     Working,
     /// Agent needs human input and is blocked on a response.

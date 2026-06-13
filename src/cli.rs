@@ -1021,6 +1021,7 @@ pub(super) fn parse_read_format(value: &str) -> std::io::Result<ReadFormat> {
 fn parse_agent_status(value: &str) -> std::io::Result<AgentStatus> {
     match value {
         "idle" => Ok(AgentStatus::Idle),
+        "stale" => Ok(AgentStatus::Stale),
         "working" => Ok(AgentStatus::Working),
         "blocked" => Ok(AgentStatus::Blocked),
         "done" => Ok(AgentStatus::Done),
@@ -1034,6 +1035,7 @@ fn parse_agent_status(value: &str) -> std::io::Result<AgentStatus> {
 pub(super) fn parse_pane_agent_state(value: &str) -> std::io::Result<PaneAgentState> {
     match value {
         "idle" => Ok(PaneAgentState::Idle),
+        "stale" => Ok(PaneAgentState::Stale),
         "working" => Ok(PaneAgentState::Working),
         "blocked" => Ok(PaneAgentState::Blocked),
         "unknown" => Ok(PaneAgentState::Unknown),

@@ -2486,6 +2486,9 @@ fn install_hermes_errors_when_config_dir_missing() {
 fn bundled_integration_assets_report_session_refs() {
     assert!(PI_EXTENSION_ASSET.contains("agent_session_path"));
     assert!(PI_EXTENSION_ASSET.contains("agent_session_id"));
+    assert!(PI_EXTENSION_ASSET
+        .contains("type AgentState = \"working\" | \"blocked\" | \"idle\" | \"stale\""));
+    assert!(PI_EXTENSION_ASSET.contains("HERDR_PI_STALE_AFTER_IDLE_MS"));
     assert!(PI_EXTENSION_ASSET.contains("ctx?.hasUI !== true"));
     assert!(PI_EXTENSION_ASSET.contains("pane.report_agent_session"));
     assert!(PI_EXTENSION_ASSET.contains("pane.report_agent\""));

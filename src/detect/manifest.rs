@@ -789,6 +789,7 @@ fn read_remote_manifest(agent: Agent, bundled: &AgentManifest) -> Option<LoadedM
 pub fn agent_state_label(state: AgentState) -> &'static str {
     match state {
         AgentState::Idle => "idle",
+        AgentState::Stale => "stale",
         AgentState::Working => "working",
         AgentState::Blocked => "blocked",
         AgentState::Unknown => "unknown",

@@ -439,7 +439,7 @@ fn agent_attach(args: &[String]) -> std::io::Result<i32> {
 
 fn agent_wait(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
-        eprintln!("usage: herdr agent wait <target> --status <idle|working|blocked|unknown> [--timeout MS]");
+        eprintln!("usage: herdr agent wait <target> --status <idle|stale|working|blocked|unknown> [--timeout MS]");
         return Ok(2);
     };
 
@@ -466,7 +466,7 @@ fn agent_wait(args: &[String]) -> std::io::Result<i32> {
                 index += 2;
             }
             "help" | "--help" | "-h" => {
-                eprintln!("usage: herdr agent wait <target> --status <idle|working|blocked|unknown> [--timeout MS]");
+                eprintln!("usage: herdr agent wait <target> --status <idle|stale|working|blocked|unknown> [--timeout MS]");
                 return Ok(0);
             }
             other => {
@@ -642,7 +642,8 @@ fn agent_read(args: &[String]) -> std::io::Result<i32> {
 
 fn agent_wait_status_satisfied(desired: AgentStatus, current: &str) -> bool {
     match desired {
-        AgentStatus::Idle => matches!(current, "idle" | "done"),
+        AgentStatus::Idle => matches!(current, "idle" | "done" | "stale"),
+        AgentStatus::Stale => current == "stale",
         AgentStatus::Working => current == "working",
         AgentStatus::Blocked => current == "blocked",
         AgentStatus::Unknown => current == "unknown",
@@ -653,6 +654,7 @@ fn agent_wait_status_satisfied(desired: AgentStatus, current: &str) -> bool {
 fn parse_agent_wait_status(value: &str) -> std::io::Result<AgentStatus> {
     match value {
         "idle" => Ok(AgentStatus::Idle),
+        "stale" => Ok(AgentStatus::Stale),
         "working" => Ok(AgentStatus::Working),
         "blocked" => Ok(AgentStatus::Blocked),
         "unknown" => Ok(AgentStatus::Unknown),
@@ -673,7 +675,9 @@ fn print_agent_help() {
     eprintln!("  herdr agent send <target> <text>");
     eprintln!("  herdr agent rename <target> <name>|--clear");
     eprintln!("  herdr agent focus <target>");
-    eprintln!("  herdr agent wait <target> --status <idle|working|blocked|unknown> [--timeout MS]");
+    eprintln!(
+        "  herdr agent wait <target> --status <idle|stale|working|blocked|unknown> [--timeout MS]"
+    );
     eprintln!("  herdr agent attach <target> [--takeover]");
     eprintln!("  herdr agent start <name> [--cwd PATH] [--workspace ID] [--tab ID] [--split right|down] [--env KEY=VALUE] [--focus|--no-focus] -- <argv...>");
     eprintln!("  herdr agent explain <target> [--json]");

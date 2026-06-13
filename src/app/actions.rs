@@ -794,6 +794,7 @@ fn state_label_text(state: AgentState, seen: bool) -> &'static str {
         (AgentState::Working, _) => "working",
         (AgentState::Idle, false) => "done",
         (AgentState::Idle, true) => "idle",
+        (AgentState::Stale, _) => "stale",
         (AgentState::Unknown, _) => "unknown",
     }
 }
@@ -821,10 +822,11 @@ fn tab_aggregate_state(
 
 fn state_priority(state: AgentState, seen: bool) -> u8 {
     match (state, seen) {
-        (AgentState::Blocked, _) => 5,
-        (AgentState::Working, _) => 4,
-        (AgentState::Idle, false) => 3,
-        (AgentState::Idle, true) => 2,
+        (AgentState::Blocked, _) => 6,
+        (AgentState::Working, _) => 5,
+        (AgentState::Idle, false) => 4,
+        (AgentState::Idle, true) => 3,
+        (AgentState::Stale, _) => 2,
         (AgentState::Unknown, _) => 1,
     }
 }
@@ -2785,7 +2787,10 @@ impl AppState {
             .iter_mut()
             .find_map(|tab| tab.panes.get_mut(&pane_id))?;
 
-        if change.state != AgentState::Idle {
+        if matches!(
+            change.state,
+            AgentState::Working | AgentState::Blocked | AgentState::Unknown
+        ) {
             pane.seen = true;
         } else if is_completion_transition(change) {
             pane.seen = suppress_active_tab_notifications;

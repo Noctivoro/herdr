@@ -468,6 +468,7 @@ fn display_state(state: crate::detect::AgentState, seen: bool) -> &'static str {
         (crate::detect::AgentState::Working, _) => "working",
         (crate::detect::AgentState::Idle, false) => "done",
         (crate::detect::AgentState::Idle, true) => "idle",
+        (crate::detect::AgentState::Stale, _) => "stale",
         (crate::detect::AgentState::Unknown, _) => "unknown",
     }
 }

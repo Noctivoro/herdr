@@ -199,6 +199,7 @@ pub(super) fn state_dot(state: AgentState, seen: bool, p: &Palette) -> (&'static
         (AgentState::Working, _) => ("●", Style::default().fg(p.yellow)),
         (AgentState::Idle, false) => ("●", Style::default().fg(p.teal)),
         (AgentState::Idle, true) => ("○", Style::default().fg(p.green)),
+        (AgentState::Stale, _) => ("○", Style::default().fg(p.overlay0)),
         (AgentState::Unknown, _) => ("·", Style::default().fg(p.overlay0)),
     }
 }
@@ -214,6 +215,7 @@ pub(super) fn agent_icon(
         (AgentState::Working, _) => (super::spinner_frame(tick), Style::default().fg(p.yellow)),
         (AgentState::Idle, false) => ("●", Style::default().fg(p.teal)),
         (AgentState::Idle, true) => ("✓", Style::default().fg(p.green)),
+        (AgentState::Stale, _) => ("○", Style::default().fg(p.overlay0)),
         (AgentState::Unknown, _) => ("○", Style::default().fg(p.overlay0)),
     }
 }
@@ -224,6 +226,7 @@ pub(super) fn state_label(state: AgentState, seen: bool) -> &'static str {
         (AgentState::Working, _) => "working",
         (AgentState::Idle, false) => "done",
         (AgentState::Idle, true) => "idle",
+        (AgentState::Stale, _) => "stale",
         (AgentState::Unknown, _) => "idle",
     }
 }
@@ -234,6 +237,7 @@ pub(super) fn state_label_color(state: AgentState, seen: bool, p: &Palette) -> C
         (AgentState::Working, _) => p.yellow,
         (AgentState::Idle, false) => p.teal,
         (AgentState::Idle, true) => p.green,
+        (AgentState::Stale, _) => p.overlay0,
         (AgentState::Unknown, _) => p.overlay0,
     }
 }
