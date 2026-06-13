@@ -5540,6 +5540,9 @@ mod tests {
     fn bundled_integration_assets_report_session_refs() {
         assert!(PI_EXTENSION_ASSET.contains("agent_session_path: currentAgentSessionPath"));
         assert!(PI_EXTENSION_ASSET.contains("agent_session_id: currentAgentSessionId"));
+        assert!(PI_EXTENSION_ASSET
+            .contains("type AgentState = \"working\" | \"blocked\" | \"idle\" | \"stale\""));
+        assert!(PI_EXTENSION_ASSET.contains("HERDR_PI_STALE_AFTER_IDLE_MS"));
         assert!(PI_EXTENSION_ASSET.contains("publishState(true)"));
         assert!(CLAUDE_HOOK_ASSET.contains("agent_session_id"));
         assert!(CLAUDE_HOOK_ASSET.contains("pane.report_agent_session"));

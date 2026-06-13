@@ -65,10 +65,11 @@ impl Tab {
 
 fn pane_attention_priority(state: AgentState, seen: bool) -> u8 {
     match (state, seen) {
-        (AgentState::Blocked, _) => 4,
-        (AgentState::Idle, false) => 3,
-        (AgentState::Working, _) => 2,
-        (AgentState::Idle, true) => 1,
+        (AgentState::Blocked, _) => 5,
+        (AgentState::Idle, false) => 4,
+        (AgentState::Working, _) => 3,
+        (AgentState::Idle, true) => 2,
+        (AgentState::Stale, _) => 1,
         (AgentState::Unknown, _) => 0,
     }
 }
