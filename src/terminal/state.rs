@@ -459,6 +459,9 @@ impl TerminalState {
                 FullLifecycleHookSuppressionReason::HookClear,
             );
         }
+        if let Some(seq) = seq {
+            self.hook_report_sequences.insert(source.clone(), seq);
+        }
         if session_ref.is_some() {
             if let Some(suppressed) = self.suppressed_full_lifecycle_hook_reports.remove(&source) {
                 if let Some(suppressed_ref) = suppressed.session_ref {
@@ -1890,6 +1893,52 @@ mod tests {
                 .map(|session_ref| session_ref.value.as_str()),
             Some(test_session_path("one.jsonl").as_str())
         );
+    }
+
+    #[test]
+    fn rejected_full_lifecycle_session_ref_does_not_poison_report_sequence() {
+        let mut terminal = test_terminal();
+        let parent_session = test_session_path("parent.jsonl");
+        let subagent_session = test_session_path("subagent.jsonl");
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:pi".into(),
+                "pi".into(),
+                AgentState::Idle,
+                None,
+                None,
+                crate::agent_resume::AgentSessionRef::path(parent_session.clone()),
+                Some(20),
+            )
+            .expect("parent idle report should be accepted");
+
+        let rejected_subagent_report = terminal.set_hook_authority_with_session_ref(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Idle,
+            None,
+            None,
+            crate::agent_resume::AgentSessionRef::path(subagent_session),
+            Some(10_000),
+        );
+
+        assert!(rejected_subagent_report.is_none());
+        assert_eq!(terminal.hook_report_sequences.get("herdr:pi"), Some(&20));
+
+        let parent_working = terminal.set_hook_authority_with_session_ref(
+            "herdr:pi".into(),
+            "pi".into(),
+            AgentState::Working,
+            None,
+            None,
+            crate::agent_resume::AgentSessionRef::path(parent_session),
+            Some(21),
+        );
+
+        assert!(parent_working.is_some());
+        assert_eq!(terminal.state, AgentState::Working);
+        assert_eq!(terminal.hook_report_sequences.get("herdr:pi"), Some(&21));
     }
 
     #[test]
