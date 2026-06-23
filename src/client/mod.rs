@@ -1177,19 +1177,11 @@ fn sound_from_notify_message(message: &str) -> Option<crate::sound::Sound> {
 }
 
 #[cfg(unix)]
-fn should_bridge_clipboard_image_paste(data: &[u8]) -> bool {
-    if data == b"\x1b[200~\x1b[201~" {
-        return true;
-    }
-
-    let events = crate::raw_input::parse_raw_input_bytes_sync(data);
-    matches!(
-        events.as_slice(),
-        [crate::raw_input::RawInputEvent::Key(key)]
-            if key.kind == crossterm::event::KeyEventKind::Press
-                && key.modifiers == crossterm::event::KeyModifiers::CONTROL
-                && matches!(key.code, crossterm::event::KeyCode::Char('v' | 'V'))
-    )
+fn should_bridge_clipboard_image_paste(_data: &[u8]) -> bool {
+    // Do not hijack terminal paste keys for image paste. Cmd+V / native paste
+    // must remain the normal text path for tools like Wispr Flow. Image paste
+    // is handled by an explicit Herdr command binding instead.
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -1463,10 +1455,10 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn clipboard_image_paste_bridge_triggers_on_ctrl_v_and_empty_paste() {
-        assert!(should_bridge_clipboard_image_paste(&[0x16]));
-        assert!(should_bridge_clipboard_image_paste(b"\x1b[118;5u"));
-        assert!(should_bridge_clipboard_image_paste(b"\x1b[200~\x1b[201~"));
+    fn clipboard_image_paste_bridge_does_not_hijack_standard_paste() {
+        assert!(!should_bridge_clipboard_image_paste(&[0x16]));
+        assert!(!should_bridge_clipboard_image_paste(b"\x1b[118;5u"));
+        assert!(!should_bridge_clipboard_image_paste(b"\x1b[200~\x1b[201~"));
         assert!(!should_bridge_clipboard_image_paste(
             b"\x1b[200~text\x1b[201~"
         ));
