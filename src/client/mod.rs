@@ -1792,25 +1792,14 @@ fn sound_from_notify_message(message: &str) -> Option<crate::sound::Sound> {
 
 #[cfg(unix)]
 fn should_bridge_clipboard_image_paste(
-    data: &[u8],
-    is_remote_client: bool,
-    remote_image_paste_key: Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
+    _data: &[u8],
+    _is_remote_client: bool,
+    _remote_image_paste_key: Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
 ) -> bool {
-    if data == b"\x1b[200~\x1b[201~" {
-        return is_remote_client;
-    }
-
-    let Some(remote_image_paste_key) = remote_image_paste_key else {
-        return false;
-    };
-
-    let events = crate::raw_input::parse_raw_input_bytes_sync(data);
-    matches!(
-        events.as_slice(),
-        [crate::raw_input::RawInputEvent::Key(key)]
-            if key.kind == crossterm::event::KeyEventKind::Press
-                && crate::config::terminal_key_matches_combo(*key, remote_image_paste_key)
-    )
+    // Do not hijack terminal paste keys for image paste. Cmd+V / native paste
+    // must remain the normal text path for tools like Wispr Flow. Image paste
+    // is handled by an explicit Herdr command binding instead.
+    false
 }
 
 #[cfg(unix)]
@@ -2220,27 +2209,22 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn clipboard_image_paste_bridge_triggers_on_configured_key_and_empty_paste() {
+    fn clipboard_image_paste_bridge_does_not_hijack_standard_paste() {
         let ctrl_v = crate::config::parse_key_combo("ctrl+v").unwrap();
-        assert!(should_bridge_clipboard_image_paste(
+        assert!(!should_bridge_clipboard_image_paste(
             &[0x16],
             true,
             Some(ctrl_v)
         ));
-        assert!(should_bridge_clipboard_image_paste(
+        assert!(!should_bridge_clipboard_image_paste(
             b"\x1b[118;5u",
             true,
             Some(ctrl_v)
         ));
-        assert!(should_bridge_clipboard_image_paste(
+        assert!(!should_bridge_clipboard_image_paste(
             b"\x1b[200~\x1b[201~",
             true,
             None
-        ));
-        assert!(!should_bridge_clipboard_image_paste(
-            b"\x1b[200~\x1b[201~",
-            false,
-            Some(ctrl_v)
         ));
         assert!(!should_bridge_clipboard_image_paste(
             b"\x1b[200~text\x1b[201~",
