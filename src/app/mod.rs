@@ -610,6 +610,7 @@ impl App {
             pane_gaps: config.ui.pane_gaps,
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
+            privacy_mode: crate::privacy::PrivacyModeState::from_config(&config.privacy),
             pane_history_persistence: config.experimental.pane_history,
             reveal_hidden_cursor_for_cjk_ime: config.experimental.reveal_hidden_cursor_for_cjk_ime,
             cjk_ime_agent_filter_configured: !config.experimental.cjk_ime_agents.is_empty(),
@@ -1394,6 +1395,13 @@ impl App {
                 self.state.sound = config.ui.sound.clone();
                 self.state.toast_config = config.ui.toast.clone();
             }
+        }
+
+        if !invalid_section("privacy") {
+            let was_enabled = self.state.privacy_mode.enabled;
+            self.state.privacy_mode =
+                crate::privacy::PrivacyModeState::from_config(&config.privacy);
+            self.state.privacy_mode.enabled = was_enabled;
         }
 
         if !invalid_section("experimental") {

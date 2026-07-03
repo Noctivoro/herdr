@@ -182,6 +182,7 @@ close_pane = "prefix+x"
 zoom = "prefix+z"
 resize_mode = "prefix+r"
 toggle_sidebar = "prefix+b"
+toggle_privacy_mode = "prefix+u"
 ```
 
 Optional actions are unset by default. Bind them with `prefix+` for prefix-mode behavior, or with an explicit modified chord when you intentionally want a direct shortcut:
@@ -203,6 +204,25 @@ next_tab = ["prefix+n", "ctrl+alt+]"]
 Key strings accept plain keys, modifier combinations such as `ctrl+a`, `shift+n`, `alt+1`, `cmd+k`, and special keys such as `enter`, `tab`, `esc`, `left`, `right`, `up`, and `down`. Named punctuation such as `minus`, `comma`, `ampersand`, `plus`, and `backtick` is also accepted. Plain direct printable keys such as `n` are unsafe because they intercept typing; use `prefix+n` unless you intentionally want a direct binding. The `navigate_workspace_*` and `navigate_pane_*` fields are navigate-mode-only and may use plain keys such as `j` or `k`; they must not use `prefix+`, `esc`, `enter`, `tab`, `shift+tab`, `left`, `right`, or unmodified `1` through `9`. Left and right arrows are permanent aliases for pane-left and pane-right navigation. These navigate-mode shortcuts are independent from general action bindings such as `focus_pane_down = "prefix+j"`; when both use the same key, the navigate-mode shortcut wins while navigate mode is open. Alt, Cmd/Super, and punctuation with modifiers depend on your terminal and tmux settings.
 
 If you have old custom keybindings and want the new defaults, run `herdr config reset-keys`. Herdr backs up `config.toml`, removes `[keys]` and `[[keys.command]]`, and uses built-in v2 defaults after restart or `herdr server reload-config`.
+
+## Privacy mode
+
+Privacy mode is a camera-safe redaction layer for live Herdr rendering. It masks configured private terms anywhere they appear in the rendered UI, including panes, tabs, sidebar labels, toasts, and overlays. Toggle it with the configured `toggle_privacy_mode` keybinding; the sidebar footer shows the current lock/unlock state.
+
+```toml
+[privacy]
+enabled = false
+patterns_file = "~/.config/herdr/privacy-patterns.txt"
+patterns = ["Private Client Name", "private-client.example"]
+replacement = "█"
+
+[keys]
+toggle_privacy_mode = "prefix+u"
+```
+
+The patterns file is newline-delimited. Blank lines and `#` comments are ignored. Missing pattern files are ignored so you can keep a private, machine-local list outside your repo.
+
+Privacy mode only redacts what Herdr renders as terminal text. It does not inspect browser windows, desktop notifications, images, audio, or content already captured by a recorder before privacy mode was turned on.
 
 ## Indexed jumps
 

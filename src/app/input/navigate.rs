@@ -1279,6 +1279,7 @@ pub(crate) enum NavigateAction {
     Zoom,
     EnterResizeMode,
     ToggleSidebar,
+    TogglePrivacyMode,
     CyclePaneNext,
     CyclePanePrevious,
     LastPane,
@@ -1409,6 +1410,7 @@ fn action_for_key(
         (&kb.zoom, NavigateAction::Zoom),
         (&kb.resize_mode, NavigateAction::EnterResizeMode),
         (&kb.toggle_sidebar, NavigateAction::ToggleSidebar),
+        (&kb.toggle_privacy_mode, NavigateAction::TogglePrivacyMode),
         (&kb.reload_config, NavigateAction::ReloadConfig),
         (
             &kb.open_notification_target,
@@ -1616,6 +1618,21 @@ pub(super) fn execute_navigate_action_in_context(
         NavigateAction::EnterResizeMode => state.mode = Mode::Resize,
         NavigateAction::ToggleSidebar => {
             state.sidebar_collapsed = !state.sidebar_collapsed;
+            leave_navigate_mode(state);
+        }
+        NavigateAction::TogglePrivacyMode => {
+            state.toggle_privacy_mode();
+            state.toast = Some(crate::app::state::ToastNotification {
+                kind: crate::app::state::ToastKind::UpdateInstalled,
+                title: if state.privacy_mode_enabled() {
+                    "privacy mode on".to_string()
+                } else {
+                    "privacy mode off".to_string()
+                },
+                context: "client-name redaction can be toggled any time".to_string(),
+                position: None,
+                target: None,
+            });
             leave_navigate_mode(state);
         }
         NavigateAction::CyclePaneNext => {
@@ -2050,6 +2067,25 @@ mod tests {
 
         assert!(state.sidebar_collapsed);
         assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn custom_privacy_mode_key_toggles_and_exits_navigate() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.keybinds.toggle_privacy_mode = crate::config::ActionKeybinds::prefix("g");
+        assert!(!state.privacy_mode_enabled());
+
+        handle_navigate_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::empty()),
+        );
+
+        assert!(state.privacy_mode_enabled());
+        assert_eq!(state.mode, Mode::Terminal);
+        assert_eq!(
+            state.toast.as_ref().map(|toast| toast.title.as_str()),
+            Some("privacy mode on")
+        );
     }
 
     #[test]

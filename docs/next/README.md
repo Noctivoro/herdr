@@ -165,6 +165,7 @@ not a gui window, not a web dashboard, not electron. herdr runs inside whatever 
 - **tabs** — first-class in the socket api and cli
 - **copy-friendly** — drag-select pane text, double-click tokens, or use keyboard copy mode with `prefix+[`, `h/j/k/l`, `{`/`}`, `v`, and `y`
 - **notifications** — sounds and toasts for background events; tab-aware suppression
+- **privacy mode** — toggle camera-safe redaction for configured private names while recording
 - **18 built-in themes** — catppuccin, terminal, tokyo night, gruvbox, one, solarized, kanagawa, rosé pine, vesper, and light variants for the main palettes
 - **session persistence** — pane processes survive client detach; sessions restore panes after full restart, with opt-in recent screen history
 
@@ -248,6 +249,7 @@ Press `ctrl+b` to enter prefix mode. Default actions are prefix-first and tmux-l
 | `prefix+v` / `prefix+minus` | split pane |
 | `prefix+x` | close pane |
 | `prefix+b` | toggle sidebar |
+| `prefix+u` | toggle privacy mode |
 | `prefix+z` | zoom pane |
 | `prefix+r` | resize mode |
 | `prefix+q` | detach |

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- Added MMAI privacy mode with `keys.toggle_privacy_mode`, `[privacy]` patterns, frame redaction for configured private terms, and a sidebar lock/unlock indicator.
+
 ## [0.7.3] - 2026-07-08
 
 ### Fixed
