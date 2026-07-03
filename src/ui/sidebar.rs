@@ -777,6 +777,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
         }
     }
 
+    render_privacy_status(app, frame, area, true, p);
     render_sidebar_toggle(app, frame, area, true, p);
 }
 
@@ -836,6 +837,7 @@ pub(super) fn render_sidebar(
 
     render_workspace_list(app, terminal_runtimes, frame, ws_area, is_navigating);
     render_agent_detail(app, terminal_runtimes, frame, detail_area);
+    render_privacy_status(app, frame, area, false, p);
     render_sidebar_toggle(app, frame, area, false, p);
 }
 
@@ -1193,6 +1195,58 @@ pub(crate) fn expanded_sidebar_toggle_rect(area: Rect) -> Rect {
     )
 }
 
+fn render_privacy_status(
+    app: &AppState,
+    frame: &mut Frame,
+    area: Rect,
+    collapsed: bool,
+    p: &Palette,
+) {
+    if area.width <= 1 || area.height == 0 {
+        return;
+    }
+
+    let y = area.y + area.height.saturating_sub(1);
+    let content_w = area.width.saturating_sub(1);
+    if content_w == 0 {
+        return;
+    }
+
+    let icon = if app.privacy_mode_enabled() {
+        "🔒"
+    } else {
+        "🔓"
+    };
+    let style = if app.privacy_mode_enabled() {
+        Style::default().fg(p.green).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(p.overlay0)
+    };
+
+    if collapsed {
+        frame.render_widget(
+            Paragraph::new(Span::styled(icon, style)),
+            Rect::new(area.x, y, content_w.min(2), 1),
+        );
+        return;
+    }
+
+    let key = app
+        .keybinds
+        .toggle_privacy_mode
+        .label()
+        .unwrap_or_else(|| "unset".to_string());
+    let max_width = content_w.saturating_sub(1) as usize;
+    if max_width == 0 {
+        return;
+    }
+    let label = truncate_text(&format!("{icon} {key} PRIVACY MODE"), max_width);
+    frame.render_widget(
+        Paragraph::new(Span::styled(label, style)),
+        Rect::new(area.x, y, max_width as u16, 1),
+    );
+}
+
 fn render_sidebar_toggle(
     app: &AppState,
     frame: &mut Frame,
@@ -1239,6 +1293,27 @@ mod tests {
             terminal.backend().buffer()[(toggle.x, toggle.y)].symbol(),
             "«"
         );
+    }
+
+    #[test]
+    fn expanded_privacy_status_shows_lock_keybind_and_label() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.privacy_mode.enabled = true;
+        app.keybinds.toggle_privacy_mode = crate::config::ActionKeybinds::prefix("u");
+        let area = Rect::new(0, 0, 26, 20);
+        let mut terminal =
+            Terminal::new(TestBackend::new(26, 20)).expect("test terminal should initialize");
+
+        terminal
+            .draw(|frame| render_privacy_status(&app, frame, area, false, &app.palette))
+            .expect("privacy status should render");
+
+        let row = (0..26)
+            .map(|x| terminal.backend().buffer()[(x, 19)].symbol().to_string())
+            .collect::<String>();
+        assert!(row.contains("🔒"));
+        assert!(row.contains("prefix+u"));
+        assert!(row.contains("PRIVACY MODE"));
     }
 
     #[test]

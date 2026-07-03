@@ -64,6 +64,7 @@ mod logging;
 mod pane;
 mod persist;
 mod platform;
+mod privacy;
 mod product_announcements;
 mod protocol;
 mod pty;
@@ -179,6 +180,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # zoom = "prefix+z"       # legacy alias: fullscreen
 # resize_mode = "prefix+r"
 # toggle_sidebar = "prefix+b"
+# toggle_privacy_mode = "prefix+u"
 
 # Navigate-mode movement. These local shortcuts win while navigate mode is open.
 # They are independent from focus_pane_*. Do not include prefix+, esc, enter, tab, or 1..9 here.
@@ -206,6 +208,14 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 
 # [worktrees]
 # directory = "~/.herdr/worktrees"
+
+[privacy]
+# Camera-safe mode masks configured private terms in Herdr-rendered text.
+# Toggle at runtime with keys.toggle_privacy_mode.
+# enabled = false
+# patterns_file = "~/.config/herdr/privacy-patterns.txt"
+# patterns = []
+# replacement = "█"
 
 [ui]
 # Sidebar width (auto-scaled based on workspace names, this sets the default)

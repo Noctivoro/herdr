@@ -1351,6 +1351,7 @@ pub struct AppState {
     pub confirm_close: bool,
     pub prompt_new_tab_name: bool,
     pub show_agent_labels_on_pane_borders: bool,
+    pub privacy_mode: crate::privacy::PrivacyModeState,
     pub pane_history_persistence: bool,
     /// Expose the focused pane's cursor anchor to the outer terminal even when
     /// the pane requested `?25l`. See `[experimental] reveal_hidden_cursor_for_cjk_ime`.
@@ -1431,6 +1432,18 @@ impl AppState {
 
     pub fn agent_border_labels_enabled(&self) -> bool {
         self.show_agent_labels_on_pane_borders
+    }
+
+    pub fn privacy_mode_enabled(&self) -> bool {
+        self.privacy_mode.enabled
+    }
+
+    pub fn privacy_redaction_active(&self) -> bool {
+        self.privacy_mode.should_redact()
+    }
+
+    pub fn toggle_privacy_mode(&mut self) {
+        self.privacy_mode.enabled = !self.privacy_mode.enabled;
     }
 
     pub fn pane_history_persistence_enabled(&self) -> bool {
@@ -1698,6 +1711,7 @@ impl AppState {
             confirm_close: true,
             prompt_new_tab_name: true,
             show_agent_labels_on_pane_borders: false,
+            privacy_mode: crate::privacy::PrivacyModeState::default(),
             pane_history_persistence: false,
             reveal_hidden_cursor_for_cjk_ime: false,
             cjk_ime_agent_filter_configured: false,

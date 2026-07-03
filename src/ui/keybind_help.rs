@@ -65,6 +65,7 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
             help_entry(keybind_label(&kb.settings), "settings"),
             help_entry(keybind_label(&kb.detach), "detach"),
             help_entry(keybind_label(&kb.reload_config), "reload config"),
+            help_entry(keybind_label(&kb.toggle_privacy_mode), "privacy mode"),
             help_entry(
                 keybind_label(&kb.open_notification_target),
                 "open notification target",

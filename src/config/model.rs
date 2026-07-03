@@ -217,6 +217,30 @@ pub struct TerminalConfig {
     pub new_cwd: NewTerminalCwdConfig,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PrivacyConfig {
+    /// Initial runtime state for privacy mode. Can be toggled live without rewriting config.
+    pub enabled: bool,
+    /// Inline terms to mask when privacy mode is active.
+    pub patterns: Vec<String>,
+    /// Optional newline-delimited terms file. Missing files are ignored.
+    pub patterns_file: String,
+    /// Single-cell replacement symbol used for matched text.
+    pub replacement: String,
+}
+
+impl Default for PrivacyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            patterns: Vec::new(),
+            patterns_file: crate::privacy::DEFAULT_PATTERNS_FILE.to_string(),
+            replacement: crate::privacy::DEFAULT_REPLACEMENT.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct SessionConfig {
@@ -266,6 +290,7 @@ pub struct Config {
     pub onboarding: Option<bool>,
     pub theme: ThemeConfig,
     pub terminal: TerminalConfig,
+    pub privacy: PrivacyConfig,
     pub session: SessionConfig,
     pub update: UpdateConfig,
     pub keys: KeysConfig,
@@ -391,6 +416,8 @@ pub struct KeysConfig {
     pub resize_mode: BindingConfig,
     /// Toggle sidebar collapse. Default: "prefix+b"
     pub toggle_sidebar: BindingConfig,
+    /// Toggle privacy redaction mode. Default: "prefix+u"
+    pub toggle_privacy_mode: BindingConfig,
     /// Optional indexed shortcuts expanded over number keys 1-9.
     pub indexed: IndexedKeysConfig,
     /// Prefix-mode custom command bindings.
@@ -597,6 +624,7 @@ impl Default for KeysConfig {
             zoom: BindingConfig::one("prefix+z"),
             resize_mode: BindingConfig::one("prefix+r"),
             toggle_sidebar: BindingConfig::one("prefix+b"),
+            toggle_privacy_mode: BindingConfig::one("prefix+u"),
             indexed: IndexedKeysConfig::default(),
             command: Vec::new(),
         }

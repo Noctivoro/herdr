@@ -306,6 +306,7 @@ pub struct Keybinds {
     pub zoom: ActionKeybinds,
     pub resize_mode: ActionKeybinds,
     pub toggle_sidebar: ActionKeybinds,
+    pub toggle_privacy_mode: ActionKeybinds,
     pub custom_commands: Vec<CustomCommandKeybind>,
 }
 
@@ -492,6 +493,10 @@ impl Config {
             zoom: action!("keys.zoom", &self.keys.zoom),
             resize_mode: action!("keys.resize_mode", &self.keys.resize_mode),
             toggle_sidebar: action!("keys.toggle_sidebar", &self.keys.toggle_sidebar),
+            toggle_privacy_mode: action!(
+                "keys.toggle_privacy_mode",
+                &self.keys.toggle_privacy_mode
+            ),
             custom_commands: Vec::new(),
         };
 

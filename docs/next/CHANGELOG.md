@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Added privacy mode with `keys.toggle_privacy_mode`, `[privacy]` patterns, frame redaction for configured private terms, and a sidebar lock/unlock indicator.
 - Added local plugin v1 support with `plugin.link/list/unlink/enable/disable`,
   manifest-declared actions, event hooks, managed plugin panes, link handlers,
   command logs, keybinding integration, and authoring docs under Preview docs.
