@@ -24,6 +24,45 @@ pub struct NewPane {
     pub runtime: TerminalRuntime,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TabColor {
+    Blue,
+    Green,
+    Yellow,
+    Red,
+    Purple,
+}
+
+impl TabColor {
+    pub const BLUE_MENU_LABEL: &'static str = "Color: Blue";
+    pub const GREEN_MENU_LABEL: &'static str = "Color: Green";
+    pub const YELLOW_MENU_LABEL: &'static str = "Color: Yellow";
+    pub const RED_MENU_LABEL: &'static str = "Color: Red";
+    pub const PURPLE_MENU_LABEL: &'static str = "Color: Purple";
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Blue => "Blue",
+            Self::Green => "Green",
+            Self::Yellow => "Yellow",
+            Self::Red => "Red",
+            Self::Purple => "Purple",
+        }
+    }
+
+    pub fn from_menu_label(label: &str) -> Option<Self> {
+        match label {
+            Self::BLUE_MENU_LABEL => Some(Self::Blue),
+            Self::GREEN_MENU_LABEL => Some(Self::Green),
+            Self::YELLOW_MENU_LABEL => Some(Self::Yellow),
+            Self::RED_MENU_LABEL => Some(Self::Red),
+            Self::PURPLE_MENU_LABEL => Some(Self::Purple),
+            _ => None,
+        }
+    }
+}
+
 enum SplitCommand<'a> {
     Shell {
         command: &'a str,
@@ -37,6 +76,7 @@ enum SplitCommand<'a> {
 
 pub struct Tab {
     pub custom_name: Option<String>,
+    pub color: Option<TabColor>,
     pub number: usize,
     /// Identity source for this tab's pane tree.
     pub root_pane: PaneId,
@@ -169,6 +209,7 @@ impl Tab {
         Ok((
             Self {
                 custom_name: None,
+                color: None,
                 number,
                 root_pane: root_id,
                 layout,
@@ -448,6 +489,7 @@ impl Tab {
         panes.insert(pane_id, moved.pane_state);
         Self {
             custom_name,
+            color: None,
             number,
             root_pane: pane_id,
             layout: TileLayout::from_saved(Node::Pane(pane_id), pane_id),
