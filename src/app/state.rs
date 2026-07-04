@@ -1152,7 +1152,16 @@ impl ContextMenuState {
                 "Open worktree...",
                 "Collapse",
             ],
-            ContextMenuKind::Tab { .. } => &["New tab", "Rename", "Close"],
+            ContextMenuKind::Tab { .. } => &[
+                "New tab",
+                "Rename",
+                "Close",
+                crate::workspace::TabColor::BLUE_MENU_LABEL,
+                crate::workspace::TabColor::GREEN_MENU_LABEL,
+                crate::workspace::TabColor::YELLOW_MENU_LABEL,
+                crate::workspace::TabColor::RED_MENU_LABEL,
+                crate::workspace::TabColor::PURPLE_MENU_LABEL,
+            ],
             ContextMenuKind::Pane {
                 has_manual_label: true,
                 source_pane_id: Some(_),

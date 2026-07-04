@@ -2,12 +2,12 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, List, ListItem, ListState, Paragraph},
+    widgets::{Clear, Paragraph},
     Frame,
 };
 
-use super::widgets::{panel_contrast_fg, render_panel_shell};
-use crate::app::AppState;
+use super::widgets::{panel_contrast_fg, render_panel_shell, tab_color_bg};
+use crate::app::{state::ContextMenuKind, AppState};
 
 fn prefix_rhs_label(bindings: &crate::config::ActionKeybinds) -> String {
     bindings
@@ -265,20 +265,62 @@ pub(super) fn render_context_menu(app: &AppState, frame: &mut Frame) {
         return;
     };
 
-    let items: Vec<ListItem> = menu
-        .items()
-        .iter()
-        .map(|item| ListItem::new(Line::from(*item)))
-        .collect();
-    let list = List::new(items)
-        .style(Style::default().fg(p.text))
-        .highlight_style(
+    for (idx, item) in menu.items().iter().enumerate() {
+        let y = inner.y + idx as u16;
+        if y >= inner.y + inner.height {
+            break;
+        }
+        let selected = idx == menu.list.highlighted;
+        let row = Rect::new(inner.x, y, inner.width, 1);
+        let row_style = if selected {
             Style::default()
                 .bg(p.accent)
                 .fg(panel_contrast_fg(p))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().bg(p.panel_bg).fg(p.text)
+        };
+        frame.render_widget(
+            Paragraph::new(context_menu_item_line(app, item, selected)).style(row_style),
+            row,
+        );
+    }
+}
+
+fn context_menu_item_line(app: &AppState, item: &str, selected: bool) -> Line<'static> {
+    let p = &app.palette;
+    let text_style = if selected {
+        Style::default()
+            .fg(panel_contrast_fg(p))
+            .bg(p.accent)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(p.text).bg(p.panel_bg)
+    };
+
+    let Some(color) = crate::workspace::TabColor::from_menu_label(item) else {
+        return Line::from(Span::styled(format!(" {item} "), text_style));
+    };
+
+    let active_for_target = app
+        .context_menu
+        .as_ref()
+        .and_then(|menu| match &menu.kind {
+            ContextMenuKind::Tab { ws_idx, tab_idx } => Some((*ws_idx, *tab_idx)),
+            _ => None,
+        })
+        .and_then(|(ws_idx, tab_idx)| app.workspaces.get(ws_idx)?.tabs.get(tab_idx))
+        .is_some_and(|tab| tab.color == Some(color));
+    let check = if active_for_target { "✓" } else { " " };
+    let bg = if selected { p.accent } else { p.panel_bg };
+    Line::from(vec![
+        Span::styled(
+            " ■ ",
+            Style::default()
+                .fg(tab_color_bg(p, color))
+                .bg(bg)
                 .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(" ");
-    let mut state = ListState::default().with_selected(Some(menu.list.highlighted));
-    frame.render_stateful_widget(list, inner, &mut state);
+        ),
+        Span::styled(format!("{check} {} ", color.label()), text_style),
+    ])
 }

@@ -747,6 +747,21 @@ pub(super) fn apply_context_menu_action(
                 };
             }
         }
+        (ContextMenuKind::Tab { ws_idx, tab_idx }, Some(item)) => {
+            if let Some(color) = crate::workspace::TabColor::from_menu_label(item) {
+                if let Some(tab) = state
+                    .workspaces
+                    .get_mut(ws_idx)
+                    .and_then(|ws| ws.tabs.get_mut(tab_idx))
+                {
+                    tab.color = Some(color);
+                    state.mark_session_dirty();
+                }
+                state.mode = Mode::Terminal;
+            } else {
+                leave_modal(state);
+            }
+        }
         (ContextMenuKind::Pane { pane_id, .. }, Some("Rename pane")) => {
             open_rename_pane(state, pane_id);
         }
@@ -1881,6 +1896,40 @@ mod tests {
         assert_eq!(state.request_remove_linked_worktree, None);
         assert_eq!(state.workspaces.len(), 1);
         assert_eq!(state.workspaces[0].display_name(), "main");
+        assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn tab_context_menu_color_item_colors_target_tab_without_switching() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.workspaces[0].test_add_tab(Some("logs"));
+        state.active = Some(0);
+        state.selected = 0;
+        state.workspaces[0].active_tab = 0;
+        state.mode = Mode::ContextMenu;
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Tab {
+                ws_idx: 0,
+                tab_idx: 1,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        let idx = menu
+            .items()
+            .iter()
+            .position(|item| *item == crate::workspace::TabColor::GREEN_MENU_LABEL)
+            .expect("green tab color item");
+        let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, idx);
+
+        assert_eq!(state.workspaces[0].active_tab, 0);
+        assert_eq!(
+            state.workspaces[0].tabs[1].color,
+            Some(crate::workspace::TabColor::Green)
+        );
         assert_eq!(state.mode, Mode::Terminal);
     }
 

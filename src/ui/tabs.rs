@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 use super::text::display_width_u16;
-use super::widgets::panel_contrast_fg;
+use super::widgets::{panel_contrast_fg, tab_color_bg};
 use crate::app::AppState;
 
 const MIN_TAB_WIDTH: u16 = 8;
@@ -321,7 +321,18 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
             continue;
         }
         let active = idx == ws.active_tab;
-        let style = if active {
+        let style = if let Some(color) = tab.color {
+            let base = Style::default()
+                .fg(panel_contrast_fg(p))
+                .bg(tab_color_bg(p, color));
+            if active {
+                base.add_modifier(Modifier::BOLD)
+            } else if tab.is_auto_named() {
+                base.add_modifier(Modifier::DIM)
+            } else {
+                base
+            }
+        } else if active {
             let base = Style::default().fg(panel_contrast_fg(p)).bg(p.accent);
             if tab.is_auto_named() {
                 base

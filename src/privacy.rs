@@ -68,10 +68,10 @@ fn normalize_patterns(patterns: Vec<String>) -> Vec<String> {
         .into_iter()
         .filter_map(|pattern| {
             let trimmed = pattern.trim();
-            if trimmed.chars().count() < 2 {
+            let key = normalized_match_text(trimmed).0;
+            if key.chars().count() < 2 {
                 return None;
             }
-            let key = trimmed.to_ascii_lowercase();
             if !seen.insert(key) {
                 return None;
             }
@@ -156,23 +156,25 @@ fn matched_cells(row: &str, cell_ranges: &[(usize, usize, u16)], patterns: &[Str
         return Vec::new();
     }
 
-    let haystack = row.to_ascii_lowercase();
+    let (haystack, haystack_to_row_byte) = normalized_match_text(row);
     let mut redacted = HashSet::new();
     for pattern in patterns {
-        let needle = pattern.to_ascii_lowercase();
+        let needle = normalized_match_text(pattern).0;
         if needle.is_empty() {
             continue;
         }
         let mut search_from = 0;
         while let Some(offset) = haystack[search_from..].find(&needle) {
-            let start = search_from + offset;
-            let end = start + needle.len();
+            let normalized_start = search_from + offset;
+            let normalized_end = normalized_start + needle.len();
+            let start = haystack_to_row_byte[normalized_start];
+            let end = haystack_to_row_byte[normalized_end];
             for (cell_start, cell_end, x) in cell_ranges {
                 if ranges_overlap(start, end, *cell_start, *cell_end) {
                     redacted.insert(*x);
                 }
             }
-            search_from = end;
+            search_from = normalized_end;
             if search_from >= haystack.len() {
                 break;
             }
@@ -182,6 +184,41 @@ fn matched_cells(row: &str, cell_ranges: &[(usize, usize, u16)], patterns: &[Str
     let mut cells = redacted.into_iter().collect::<Vec<_>>();
     cells.sort_unstable();
     cells
+}
+
+fn normalized_match_text(value: &str) -> (String, Vec<usize>) {
+    let mut normalized = String::new();
+    let mut normalized_to_original_byte = vec![0];
+
+    for (idx, ch) in value.char_indices() {
+        if is_optional_apostrophe(ch) {
+            continue;
+        }
+
+        let original_end = idx + ch.len_utf8();
+        let canonical = match ch {
+            '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{2033}' => '"',
+            '\u{00A0}' if ch.is_whitespace() => ' ',
+            _ if ch.is_whitespace() => ' ',
+            _ => ch,
+        };
+
+        for lower in canonical.to_lowercase() {
+            normalized.push(lower);
+            for _ in 0..lower.len_utf8() {
+                normalized_to_original_byte.push(original_end);
+            }
+        }
+    }
+
+    (normalized, normalized_to_original_byte)
+}
+
+fn is_optional_apostrophe(ch: char) -> bool {
+    matches!(
+        ch,
+        '\'' | '\u{2018}' | '\u{2019}' | '\u{201B}' | '\u{2032}' | '\u{02BC}'
+    )
 }
 
 fn ranges_overlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
@@ -241,6 +278,34 @@ mod tests {
     }
 
     #[test]
+    fn privacy_redaction_matches_apostrophe_variants() {
+        let state = PrivacyModeState {
+            enabled: true,
+            patterns: vec!["Can't Stop Moving".to_string()],
+            replacement: DEFAULT_REPLACEMENT.to_string(),
+        };
+
+        for visible_text in ["Can't Stop Moving", "Can’t Stop Moving", "Cant Stop Moving"] {
+            let mut buffer = Buffer::empty(Rect::new(0, 0, 30, 1));
+            buffer.set_string(
+                0,
+                0,
+                format!("{visible_text} quote"),
+                ratatui::style::Style::default(),
+            );
+
+            redact_buffer(&mut buffer, &state);
+
+            let redacted = buffer_text(&buffer);
+            assert!(
+                !redacted.contains(visible_text),
+                "visible variant was not redacted: {visible_text:?}"
+            );
+            assert!(redacted.contains(" quote"));
+        }
+    }
+
+    #[test]
     fn privacy_redaction_noops_when_disabled() {
         let mut buffer = Buffer::empty(Rect::new(0, 0, 18, 1));
         buffer.set_string(0, 0, "Acme Movers", ratatui::style::Style::default());
@@ -260,13 +325,19 @@ mod tests {
         let patterns = normalize_patterns(vec![
             " Acme Movers ".to_string(),
             "acme movers".to_string(),
+            "Can’t Stop Moving".to_string(),
+            "Can't Stop Moving".to_string(),
             "x".to_string(),
             "Beta".to_string(),
         ]);
 
         assert_eq!(
             patterns,
-            vec!["Acme Movers".to_string(), "Beta".to_string()]
+            vec![
+                "Can’t Stop Moving".to_string(),
+                "Acme Movers".to_string(),
+                "Beta".to_string()
+            ]
         );
     }
 }

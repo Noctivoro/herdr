@@ -1622,17 +1622,6 @@ pub(super) fn execute_navigate_action_in_context(
         }
         NavigateAction::TogglePrivacyMode => {
             state.toggle_privacy_mode();
-            state.toast = Some(crate::app::state::ToastNotification {
-                kind: crate::app::state::ToastKind::UpdateInstalled,
-                title: if state.privacy_mode_enabled() {
-                    "privacy mode on".to_string()
-                } else {
-                    "privacy mode off".to_string()
-                },
-                context: "client-name redaction can be toggled any time".to_string(),
-                position: None,
-                target: None,
-            });
             leave_navigate_mode(state);
         }
         NavigateAction::CyclePaneNext => {
@@ -2082,10 +2071,7 @@ mod tests {
 
         assert!(state.privacy_mode_enabled());
         assert_eq!(state.mode, Mode::Terminal);
-        assert_eq!(
-            state.toast.as_ref().map(|toast| toast.title.as_str()),
-            Some("privacy mode on")
-        );
+        assert!(state.toast.is_none());
     }
 
     #[test]

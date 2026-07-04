@@ -36,6 +36,16 @@ pub(super) fn panel_contrast_fg(p: &Palette) -> Color {
     }
 }
 
+pub(super) fn tab_color_bg(p: &Palette, color: crate::workspace::TabColor) -> Color {
+    match color {
+        crate::workspace::TabColor::Blue => p.blue,
+        crate::workspace::TabColor::Green => p.green,
+        crate::workspace::TabColor::Yellow => p.yellow,
+        crate::workspace::TabColor::Red => p.red,
+        crate::workspace::TabColor::Purple => p.mauve,
+    }
+}
+
 pub(crate) fn centered_popup_rect(area: Rect, popup_w: u16, popup_h: u16) -> Option<Rect> {
     let popup_w = popup_w.min(area.width.saturating_sub(4));
     let popup_h = popup_h.min(area.height.saturating_sub(2));
