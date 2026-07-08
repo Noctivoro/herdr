@@ -1209,7 +1209,7 @@ fn render_privacy_status(
     if max_width == 0 {
         return;
     }
-    let label = truncate_text(&format!("{icon} {key} PRIVACY MODE"), max_width);
+    let label = truncate_end(&format!("{icon} {key} PRIVACY MODE"), max_width);
     frame.render_widget(
         Paragraph::new(Span::styled(label, style)),
         Rect::new(area.x, y, max_width as u16, 1),

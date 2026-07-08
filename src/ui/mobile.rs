@@ -977,7 +977,7 @@ fn global_agent_counts(app: &AppState) -> GlobalAgentCounts {
             (AgentState::Blocked, _) => counts.blocked += 1,
             (AgentState::Idle, false) => counts.done += 1,
             (AgentState::Working, _) => counts.working += 1,
-            (AgentState::Idle, true) => counts.idle += 1,
+            (AgentState::Idle, true) | (AgentState::Stale, _) => counts.idle += 1,
             (AgentState::Unknown, _) => {}
         }
     }

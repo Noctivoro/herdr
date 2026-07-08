@@ -72,6 +72,7 @@
         "AgentStatus": {
           "enum": [
             "idle",
+            "stale",
             "working",
             "blocked",
             "done",
@@ -1244,6 +1245,7 @@
         "AgentStatus": {
           "enum": [
             "idle",
+            "stale",
             "working",
             "blocked",
             "done",
@@ -1942,6 +1944,7 @@
         "PaneAgentState": {
           "enum": [
             "idle",
+            "stale",
             "working",
             "blocked",
             "unknown"
@@ -5028,6 +5031,7 @@
         "AgentStatus": {
           "enum": [
             "idle",
+            "stale",
             "working",
             "blocked",
             "done",
@@ -5436,6 +5440,7 @@
         "AgentStatus": {
           "enum": [
             "idle",
+            "stale",
             "working",
             "blocked",
             "done",

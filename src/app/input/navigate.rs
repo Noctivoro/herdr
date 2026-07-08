@@ -352,6 +352,10 @@ impl App {
                 self.state.sidebar_collapsed = !self.state.sidebar_collapsed;
                 leave_navigate_mode(&mut self.state);
             }
+            NavigateAction::TogglePrivacyMode => {
+                self.state.toggle_privacy_mode();
+                leave_navigate_mode(&mut self.state);
+            }
             NavigateAction::CyclePaneNext => {
                 self.cycle_pane_via_api(false);
                 leave_navigate_mode(&mut self.state);
