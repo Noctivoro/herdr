@@ -27,7 +27,19 @@ impl App {
                 Ok(result) => result,
                 Err(err) => return encode_error(id, "plugin_pane_open_failed", err.to_string()),
             };
-        self.finish_plugin_pane_open(id, ws_idx, None, new_pane, plugin.plugin_id.clone(), pane)
+        let layout_tab_idx = self
+            .overlay_panes
+            .get(&new_pane.pane_id)
+            .map(|overlay| overlay.tab_idx);
+        self.finish_plugin_pane_open(
+            id,
+            ws_idx,
+            None,
+            layout_tab_idx,
+            new_pane,
+            plugin.plugin_id.clone(),
+            pane,
+        )
     }
 
     pub(super) fn open_plugin_split_pane(
@@ -110,7 +122,15 @@ impl App {
                 tab.zoomed = true;
             }
         }
-        self.finish_plugin_pane_open(id, ws_idx, None, new_pane, plugin.plugin_id.clone(), pane)
+        self.finish_plugin_pane_open(
+            id,
+            ws_idx,
+            None,
+            Some(tab_idx),
+            new_pane,
+            plugin.plugin_id.clone(),
+            pane,
+        )
     }
 
     pub(super) fn open_plugin_tab(
@@ -167,6 +187,7 @@ impl App {
             id,
             ws_idx,
             Some(tab_idx),
+            Some(tab_idx),
             new_pane,
             plugin.plugin_id.clone(),
             pane,
@@ -183,8 +204,15 @@ impl App {
         let mut env = super::super::env::normalize_launch_env(env)?;
         let context_json = serde_json::to_string(&context)
             .map_err(|err| ("invalid_plugin_context".to_string(), err.to_string()))?;
+        super::env::ensure_plugin_user_dirs(plugin)
+            .map_err(|err| ("plugin_user_dir_create_failed".to_string(), err.to_string()))?;
         env.retain(|(key, _)| !plugin_pane_protected_env_key(key));
         env.extend(super::env::plugin_path_env(plugin));
+        env.push((
+            crate::api::SOCKET_PATH_ENV_VAR.to_string(),
+            crate::api::socket_path().display().to_string(),
+        ));
+        env.push(("HERDR_ENV".to_string(), "1".to_string()));
         env.push(("HERDR_PLUGIN_ID".to_string(), plugin.plugin_id.clone()));
         env.push((
             "HERDR_PLUGIN_ENTRYPOINT_ID".to_string(),
@@ -205,6 +233,7 @@ impl App {
         id: String,
         ws_idx: usize,
         created_tab_idx: Option<usize>,
+        layout_tab_idx: Option<usize>,
         new_pane: crate::workspace::NewPane,
         plugin_id: String,
         pane_manifest: PluginManifestPane,
@@ -241,6 +270,9 @@ impl App {
             event: crate::api::schema::EventKind::PaneCreated,
             data: crate::api::schema::EventData::PaneCreated { pane: pane.clone() },
         });
+        if let Some(tab_idx) = layout_tab_idx {
+            self.emit_layout_updated_event(ws_idx, tab_idx);
+        }
         encode_success(
             id,
             ResponseResult::PluginPaneOpened {
@@ -273,7 +305,9 @@ impl App {
 fn plugin_pane_protected_env_key(key: &str) -> bool {
     matches!(
         key,
-        "HERDR_PLUGIN_ID"
+        crate::api::SOCKET_PATH_ENV_VAR
+            | "HERDR_ENV"
+            | "HERDR_PLUGIN_ID"
             | "HERDR_PLUGIN_ROOT"
             | "HERDR_PLUGIN_CONFIG_DIR"
             | "HERDR_PLUGIN_STATE_DIR"

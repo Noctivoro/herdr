@@ -16,12 +16,26 @@ use support::{
     unregister_spawned_herdr_pid,
 };
 
+const WORKTREE_BOOTSTRAP_MANAGED_COMPONENT: &str = "example.worktree-bootstrap-ef876653ffc3";
+
 fn unique_test_dir() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     PathBuf::from(format!("/tmp/hcli-{}-{nanos}", std::process::id()))
+}
+
+fn managed_github_plugin_dir(config_home: &Path) -> PathBuf {
+    config_home.join("herdr-dev").join("plugins").join("github")
+}
+
+fn path_missing_or_empty(path: &Path) -> bool {
+    match fs::read_dir(path) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Err(err) => panic!("failed to read {}: {err}", path.display()),
+    }
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
@@ -530,7 +544,29 @@ fn run_copilot_hook(hook_input: &str) -> Option<serde_json::Value> {
     )
 }
 
+fn run_devin_hook(
+    action: &str,
+    hook_input: &str,
+    envs: &[(&str, &str)],
+) -> Option<serde_json::Value> {
+    run_shell_hook_with_env(
+        "src/integration/assets/devin/herdr-agent-state.sh",
+        &[action],
+        hook_input,
+        envs,
+    )
+}
+
 fn run_shell_hook(asset_path: &str, args: &[&str], hook_input: &str) -> Option<serde_json::Value> {
+    run_shell_hook_with_env(asset_path, args, hook_input, &[])
+}
+
+fn run_shell_hook_with_env(
+    asset_path: &str,
+    args: &[&str],
+    hook_input: &str,
+    envs: &[(&str, &str)],
+) -> Option<serde_json::Value> {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
     let socket_path = base.join("herdr.sock");
@@ -560,7 +596,8 @@ fn run_shell_hook(asset_path: &str, args: &[&str], hook_input: &str) -> Option<s
     });
 
     let hook_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(asset_path);
-    let mut child = Command::new("bash")
+    let mut command = Command::new("bash");
+    command
         .arg(hook_path)
         .args(args)
         .env("HERDR_ENV", "1")
@@ -568,9 +605,11 @@ fn run_shell_hook(asset_path: &str, args: &[&str], hook_input: &str) -> Option<s
         .env("HERDR_PANE_ID", "p_test")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+        .stderr(Stdio::piped());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
     stdin.write_all(hook_input.as_bytes()).unwrap();
     drop(stdin);
@@ -679,6 +718,113 @@ fn copilot_hook_does_not_report_lifecycle_state() {
             "copilot session-only hook should ignore lifecycle payload {payload}"
         );
     }
+}
+
+#[test]
+fn devin_hook_ignores_prompt_session_list_fallback() {
+    let request = run_devin_hook(
+        "session",
+        r#"{"hook_event_name":"UserPromptSubmit","prompt":"run tests"}"#,
+        &[
+            ("DEVIN_PROJECT_DIR", "/tmp/project"),
+            (
+                "HERDR_DEVIN_LIST_JSON",
+                r#"[{"id":"older-session","working_directory":"/tmp/other"},{"id":"devin-session","working_directory":"/tmp/project"}]"#,
+            ),
+        ],
+    );
+
+    assert!(request.is_none());
+}
+
+#[test]
+fn devin_hook_reports_session_id_from_stdin_without_state() {
+    let request = run_devin_hook(
+        "session",
+        r#"{"hook_event_name":"SessionStart","session_id":"devin-session","source":"startup"}"#,
+        &[("HERDR_DEVIN_LIST_JSON", r#"[{"id":"older-session"}]"#)],
+    )
+    .expect("devin session start should report session identity");
+
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["agent"], "devin");
+    assert_eq!(request["params"]["agent_session_id"], "devin-session");
+    assert!(request["params"].get("state").is_none());
+}
+
+#[test]
+fn devin_hook_prefers_hook_session_id_over_list() {
+    let request = run_devin_hook(
+        "session",
+        r#"{"hook_event_name":"PreToolUse","sessionId":"fresh-session","tool_name":"exec"}"#,
+        &[
+            ("DEVIN_PROJECT_DIR", "/tmp/project"),
+            (
+                "HERDR_DEVIN_LIST_JSON",
+                r#"[{"id":"older-session","working_directory":"/tmp/project"}]"#,
+            ),
+        ],
+    )
+    .expect("devin tool hook should report session identity");
+
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["agent_session_id"], "fresh-session");
+    assert!(request["params"].get("state").is_none());
+}
+
+#[test]
+fn devin_hook_reports_tool_session_from_list_without_state() {
+    let request = run_devin_hook(
+        "session",
+        r#"{"hook_event_name":"PreToolUse","tool_name":"exec"}"#,
+        &[
+            ("DEVIN_PROJECT_DIR", "/tmp/project"),
+            (
+                "HERDR_DEVIN_LIST_JSON",
+                r#"[{"id":"older-session","working_directory":"/tmp/other"},{"id":"devin-session","working_directory":"/tmp/project"}]"#,
+            ),
+        ],
+    )
+    .expect("devin tool hook should report session identity");
+
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["agent"], "devin");
+    assert_eq!(request["params"]["agent_session_id"], "devin-session");
+    assert!(request["params"].get("state").is_none());
+}
+
+#[test]
+fn devin_hook_ignores_startup_session_list_fallback() {
+    let request = run_devin_hook(
+        "session",
+        r#"{"hook_event_name":"SessionStart","source":"startup"}"#,
+        &[
+            ("DEVIN_PROJECT_DIR", "/tmp/project"),
+            (
+                "HERDR_DEVIN_LIST_JSON",
+                r#"[{"id":"stale-session","working_directory":"/tmp/project"}]"#,
+            ),
+        ],
+    );
+
+    assert!(request.is_none());
+}
+
+#[test]
+fn devin_hook_ignores_non_matching_session_list_entries() {
+    let request = run_devin_hook(
+        "session",
+        r#"{"hook_event_name":"PreToolUse","tool_name":"exec"}"#,
+        &[
+            ("DEVIN_PROJECT_DIR", "/tmp/project"),
+            (
+                "HERDR_DEVIN_LIST_JSON",
+                r#"[{"id":"other-session","working_directory":"/tmp/other"}]"#,
+            ),
+        ],
+    );
+
+    assert!(request.is_none());
 }
 
 #[test]
@@ -883,6 +1029,9 @@ fn help_commands_exit_successfully() {
     let help_cases: &[&[&str]] = &[
         &["-h"],
         &["--help"],
+        &["api", "-h"],
+        &["api", "schema", "-h"],
+        &["completion", "-h"],
         &["status", "-h"],
         &["server", "-h"],
         &["workspace", "-h"],
@@ -912,6 +1061,46 @@ fn help_commands_exit_successfully() {
 }
 
 #[test]
+fn completion_command_prints_zsh_script_without_session_startup() {
+    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .args(["completion", "zsh"])
+        .env_remove("HERDR_SOCKET_PATH")
+        .env_remove("HERDR_CLIENT_SOCKET_PATH")
+        .env_remove("HERDR_ENV")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "status={:?} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("#compdef herdr"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("bash elvish fish powershell zsh"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("'--direction[]:DIRECTION:(right down)'"),
+        "pane split/plugin pane open should complete --direction right|down without requiring equals: {stdout}"
+    );
+    assert!(
+        !stdout.contains("--cwd=[]"),
+        "zsh completions should not suggest equals-style values unsupported by most manual parsers: {stdout}"
+    );
+    assert!(
+        !stdout.contains("--direction=[]"),
+        "zsh completions should not suggest equals-style direction values: {stdout}"
+    );
+    assert!(
+        !stdout.contains("live-handoff"),
+        "internal server handoff command should not be completed: {stdout}"
+    );
+}
+
+#[test]
 fn root_help_hides_explicit_client_command() {
     let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
         .arg("--help")
@@ -924,6 +1113,142 @@ fn root_help_hides_explicit_client_command() {
         !stdout.contains("herdr client"),
         "root help should not advertise the internal client command: {stdout}"
     );
+}
+
+#[test]
+fn root_help_advertises_api_schema_command_group() {
+    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .arg("--help")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("herdr api <subcommand>"),
+        "root help should advertise the api command group: {stdout}"
+    );
+}
+
+#[test]
+fn api_schema_default_output_is_a_short_summary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .args(["api", "schema"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Herdr API schema"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("Use `herdr api schema --json`"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.len() < 400,
+        "summary should stay small enough for terminal output: {stdout}"
+    );
+}
+
+#[test]
+fn api_schema_json_prints_bundled_schema() {
+    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .args(["api", "schema", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let schema: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(schema
+        .get("protocol")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|protocol| protocol > 0));
+    assert_eq!(
+        schema
+            .get("schemas")
+            .and_then(serde_json::Value::as_object)
+            .map(serde_json::Map::len),
+        Some(5)
+    );
+}
+
+#[test]
+fn api_snapshot_prints_live_session_snapshot() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let socket_path = base.join("herdr.sock");
+    let listener = UnixListener::bind(&socket_path).unwrap();
+
+    let server = thread::spawn({
+        let socket_path = socket_path.clone();
+        move || {
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_millis(700);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut line = String::new();
+                        let mut reader = BufReader::new(stream.try_clone().unwrap());
+                        reader.read_line(&mut line).unwrap();
+                        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                        assert_eq!(request["method"], "session.snapshot");
+                        assert_eq!(request["id"], "cli:api:snapshot");
+
+                        let response = serde_json::json!({
+                            "id": "cli:api:snapshot",
+                            "result": {
+                                "type": "ok",
+                                "marker": "snapshot-passthrough"
+                            }
+                        });
+                        writeln!(stream, "{response}").unwrap();
+                        stream.flush().unwrap();
+                        let _ = fs::remove_file(socket_path);
+                        return;
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => panic!("accept failed: {err}"),
+                }
+            }
+            panic!("CLI did not connect to fake API socket");
+        }
+    });
+
+    let value = run_cli_json(&socket_path, &["api", "snapshot"]);
+
+    assert_eq!(value["result"]["marker"], "snapshot-passthrough");
+    server.join().unwrap();
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn api_schema_output_writes_bundled_schema_to_file() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let schema_path = base.join("herdr-api.schema.json");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .args(["api", "schema", "--output"])
+        .arg(&schema_path)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("wrote API schema"),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let schema: serde_json::Value =
+        serde_json::from_slice(&fs::read(&schema_path).unwrap()).unwrap();
+    assert!(schema
+        .get("protocol")
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|protocol| protocol > 0));
+
+    cleanup_test_base(&base);
 }
 
 #[test]
@@ -1199,7 +1524,7 @@ fn integration_commands_run_locally_when_server_is_missing() {
         .unwrap();
     assert_eq!(integration_status.status.code(), Some(0));
     let status_stdout = String::from_utf8_lossy(&integration_status.stdout);
-    assert!(status_stdout.contains("pi: current (v2)"));
+    assert!(status_stdout.contains("pi: current (v4)"));
     assert!(status_stdout.contains("claude: not installed"));
 
     let integration_uninstall = Command::new(env!("CARGO_BIN_EXE_herdr"))
@@ -1295,7 +1620,7 @@ fn status_commands_report_client_and_server_versions() {
         "stdout: {full_stdout}"
     );
     assert!(
-        full_stdout.contains("  protocol: 14"),
+        full_stdout.contains("  protocol: 16"),
         "stdout: {full_stdout}"
     );
     assert!(full_stdout.contains("server:\n"), "stdout: {full_stdout}");
@@ -1328,7 +1653,7 @@ fn status_commands_report_client_and_server_versions() {
         "stdout: {server_stdout}"
     );
     assert!(
-        server_stdout.contains("protocol: 14"),
+        server_stdout.contains("protocol: 16"),
         "stdout: {server_stdout}"
     );
 
@@ -1340,7 +1665,7 @@ fn status_commands_report_client_and_server_versions() {
         "stdout: {client_stdout}"
     );
     assert!(
-        client_stdout.contains("protocol: 14"),
+        client_stdout.contains("protocol: 16"),
         "stdout: {client_stdout}"
     );
     assert!(
@@ -1350,7 +1675,7 @@ fn status_commands_report_client_and_server_versions() {
 
     let full_json = run_cli_json(&socket_path, &["status", "--json"]);
     assert_eq!(full_json["client"]["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(full_json["client"]["protocol"], 14);
+    assert_eq!(full_json["client"]["protocol"], 16);
     assert_eq!(full_json["server"]["status"], "running");
     assert_eq!(full_json["server"]["running"], true);
     assert_eq!(full_json["server"]["compatible"], true);
@@ -1364,12 +1689,12 @@ fn status_commands_report_client_and_server_versions() {
     let server_json = run_cli_json(&socket_path, &["status", "server", "--json"]);
     assert_eq!(server_json["status"], "running");
     assert_eq!(server_json["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(server_json["protocol"], 14);
+    assert_eq!(server_json["protocol"], 16);
     assert_eq!(server_json["compatible"], true);
 
     let client_json = run_cli_json(&socket_path, &["status", "client", "--json"]);
     assert_eq!(client_json["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(client_json["protocol"], 14);
+    assert_eq!(client_json["protocol"], 16);
     assert!(client_json["binary"]
         .as_str()
         .is_some_and(|path| !path.is_empty()));
@@ -1431,25 +1756,19 @@ fn server_stop_command_shuts_down_running_server() {
         "server stop should not print stdout: {}",
         String::from_utf8_lossy(&stopped.stdout)
     );
+    assert!(
+        !socket_path.exists() || UnixStream::connect(&socket_path).is_err(),
+        "api socket should be removed or stale before server stop returns"
+    );
+    assert!(
+        !client_socket.exists() || UnixStream::connect(&client_socket).is_err(),
+        "client socket should be removed or stale before server stop returns"
+    );
 
     let pid = herdr.child.process_id();
     let exit_status = herdr.child.wait().unwrap();
     unregister_spawned_herdr_pid(pid);
     assert!(exit_status.success(), "server stop should exit cleanly");
-
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline && (socket_path.exists() || client_socket.exists()) {
-        thread::sleep(Duration::from_millis(25));
-    }
-
-    assert!(
-        !socket_path.exists() || UnixStream::connect(&socket_path).is_err(),
-        "api socket should be removed or stale after server stop"
-    );
-    assert!(
-        !client_socket.exists() || UnixStream::connect(&client_socket).is_err(),
-        "client socket should be removed or stale after server stop"
-    );
 
     cleanup_spawned_herdr(herdr, base);
 }
@@ -1544,6 +1863,105 @@ fn server_stop_then_restart_restores_pane_history() {
     );
 
     cleanup_spawned_herdr(restarted, base);
+}
+
+#[test]
+fn server_start_restores_legacy_session_through_api_identity() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+    let data_dir = config_home.join(app_dir_name());
+    let pion_cwd = base.join("legacy-pion");
+    let herdr_cwd = base.join("legacy-herdr");
+
+    fs::create_dir_all(&pion_cwd).unwrap();
+    fs::create_dir_all(&herdr_cwd).unwrap();
+    fs::create_dir_all(&data_dir).unwrap();
+    let pion_cwd = pion_cwd.to_str().expect("test cwd should be UTF-8");
+    let herdr_cwd = herdr_cwd.to_str().expect("test cwd should be UTF-8");
+    let legacy_session = include_str!("fixtures/session/legacy-pre-tabs-v2.json")
+        .replace("/tmp/pion", pion_cwd)
+        .replace("/tmp/herdr", herdr_cwd);
+    fs::write(data_dir.join("session.json"), legacy_session).unwrap();
+
+    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+    wait_for_socket(&client_socket, Duration::from_secs(5));
+
+    let workspaces = run_cli_json(&socket_path, &["workspace", "list"]);
+    let restored_workspace = workspaces["result"]["workspaces"]
+        .as_array()
+        .expect("workspace.list should return workspaces")
+        .iter()
+        .find(|workspace| workspace["label"] == "legacy")
+        .expect("legacy workspace should restore");
+    let workspace_id = restored_workspace["workspace_id"]
+        .as_str()
+        .expect("restored workspace should have public id")
+        .to_string();
+    assert_eq!(restored_workspace["pane_count"], 2);
+    assert_eq!(restored_workspace["tab_count"], 1);
+    assert_eq!(
+        restored_workspace["active_tab_id"],
+        format!("{workspace_id}:t1")
+    );
+
+    let panes = run_cli_json(
+        &socket_path,
+        &["pane", "list", "--workspace", &workspace_id],
+    );
+    let panes = panes["result"]["panes"]
+        .as_array()
+        .expect("pane.list should return panes");
+    assert_eq!(panes.len(), 2);
+    let root_pane_id = format!("{workspace_id}:p1");
+    let focused_pane_id = format!("{workspace_id}:p2");
+    assert!(panes.iter().any(|pane| {
+        pane["pane_id"] == root_pane_id
+            && pane["tab_id"] == format!("{workspace_id}:t1")
+            && pane["cwd"] == pion_cwd
+            && pane["focused"] == false
+    }));
+    assert!(panes.iter().any(|pane| {
+        pane["pane_id"] == focused_pane_id
+            && pane["tab_id"] == format!("{workspace_id}:t1")
+            && pane["cwd"] == herdr_cwd
+            && pane["focused"] == true
+    }));
+
+    let reported = run_cli(
+        &socket_path,
+        &[
+            "pane",
+            "report-agent",
+            &focused_pane_id,
+            "--source",
+            "test",
+            "--agent",
+            "pi",
+            "--state",
+            "working",
+        ],
+    );
+    assert!(
+        reported.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&reported.stderr)
+    );
+
+    let agents = run_cli_json(&socket_path, &["agent", "list"]);
+    let agents = agents["result"]["agents"]
+        .as_array()
+        .expect("agent.list should return agents");
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["pane_id"], focused_pane_id);
+    assert_eq!(agents[0]["workspace_id"], workspace_id);
+    assert_eq!(agents[0]["agent"], "pi");
+    assert_eq!(agents[0]["agent_status"], "working");
+
+    cleanup_spawned_herdr(herdr, base);
 }
 
 #[test]
@@ -1757,6 +2175,76 @@ fn worktree_management_commands_work() {
     );
     assert_eq!(force_removed["result"]["type"], "worktree_removed");
     assert_eq!(force_removed["result"]["forced"], true);
+    assert!(!checkout.exists());
+
+    cleanup_spawned_herdr(herdr, base);
+}
+
+#[test]
+fn forced_worktree_remove_terminates_processes_inside_checkout() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let repo = base.join("repo");
+    let checkout = base.join("checkout-with-process");
+    create_committed_repo(&repo);
+
+    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let created = run_cli_json(
+        &socket_path,
+        &[
+            "worktree",
+            "create",
+            "--cwd",
+            repo.to_str().unwrap(),
+            "--branch",
+            "worktree/force-process",
+            "--path",
+            checkout.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    let child_workspace_id = created["result"]["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let pid_file = base.join("worktree-remove-force.pid");
+    let command = format!(
+        "python3 -c 'import os,time,pathlib; pathlib.Path(r\"{}\").write_text(str(os.getpid())); time.sleep(1000)'",
+        pid_file.display()
+    );
+    let ran = run_cli(&socket_path, &["pane", "run", &pane_id, &command]);
+    assert!(
+        ran.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let pid = wait_for_pid_file(&pid_file, Duration::from_secs(5)).unwrap_or_else(|err| {
+        panic!("failed to read pane child pid: {err}");
+    });
+    assert!(process_exists(pid), "child process was not running");
+
+    let removed = run_cli_json(
+        &socket_path,
+        &[
+            "worktree",
+            "remove",
+            "--workspace",
+            &child_workspace_id,
+            "--force",
+            "--json",
+        ],
+    );
+    assert_eq!(removed["result"]["type"], "worktree_removed");
+    assert!(wait_for_pid_exit(pid, Duration::from_secs(3)));
     assert!(!checkout.exists());
 
     cleanup_spawned_herdr(herdr, base);
@@ -2776,6 +3264,7 @@ fn plugin_link_list_unlink_cli_smoke_test() {
 id = "example.layout"
 name = "Layout"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 description = "Apply a preferred Herdr layout"
 
 [[actions]]
@@ -2916,6 +3405,7 @@ fn plugin_install_list_uninstall_offline_cli_smoke_test() {
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
@@ -3045,6 +3535,7 @@ fn plugin_install_build_failure_does_not_register_or_create_checkout() {
 id = "example.build-fail"
 name = "Build Fail"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
@@ -3115,14 +3606,9 @@ command = ["sh", "-c", "echo should-not-install"]
     );
     assert!(listed["result"]["plugins"].as_array().unwrap().is_empty());
 
-    let managed_checkout = config_home
-        .join("herdr-dev")
-        .join("plugins")
-        .join("github")
-        .join("example.build-fail");
     assert!(
-        !managed_checkout.exists(),
-        "failed build should not create managed checkout"
+        path_missing_or_empty(&managed_github_plugin_dir(&config_home)),
+        "failed build should not leave managed checkouts"
     );
 
     cleanup_test_base(&base);
@@ -3143,6 +3629,7 @@ fn plugin_install_build_spawn_failure_prints_clean_error() {
 id = "example.missing-tool"
 name = "Missing Tool"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
@@ -3231,6 +3718,7 @@ fn plugin_install_rejects_manifest_changed_by_build() {
 id = "example.manifest-mutator"
 name = "Manifest Mutator"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
@@ -3249,12 +3737,16 @@ command = ["sh", "-c", "echo reviewed"]
 id = "example.manifest-mutator"
 name = "Manifest Mutator"
 version = "0.1.0"
+min_herdr_version = "0.0.1"
 platforms = ["linux", "macos", "windows"]
+
+[[build]]
+command = ["sh", "mutate.sh"]
 
 [[actions]]
 id = "run"
-title = "Run changed command"
-command = ["sh", "-c", "echo changed"]
+title = "Run reviewed command"
+command = ["sh", "-c", "echo reviewed"]
 EOF
 "#,
     )
@@ -3307,14 +3799,9 @@ EOF
     );
     assert!(listed["result"]["plugins"].as_array().unwrap().is_empty());
 
-    let managed_checkout = config_home
-        .join("herdr-dev")
-        .join("plugins")
-        .join("github")
-        .join("example.manifest-mutator");
     assert!(
-        !managed_checkout.exists(),
-        "manifest mutation should not create managed checkout"
+        path_missing_or_empty(&managed_github_plugin_dir(&config_home)),
+        "manifest mutation should not leave managed checkouts"
     );
 
     cleanup_test_base(&base);
@@ -3336,6 +3823,7 @@ fn plugin_install_restores_previous_checkout_when_registration_fails() {
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.2.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -3357,7 +3845,7 @@ command = ["sh", "-c", "echo new"]
         .join("herdr-dev")
         .join("plugins")
         .join("github")
-        .join("example.worktree-bootstrap");
+        .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
     fs::create_dir_all(&managed_checkout).unwrap();
     fs::write(managed_checkout.join("old-marker"), "old checkout\n").unwrap();
 
@@ -3391,6 +3879,7 @@ command = ["sh", "-c", "echo new"]
                         "plugin_id": "example.worktree-bootstrap",
                         "name": "Worktree Bootstrap",
                         "version": "0.1.0",
+                        "min_herdr_version": "0.6.10",
                         "manifest_path": managed_checkout_for_server.join("herdr-plugin.toml").display().to_string(),
                         "plugin_root": managed_checkout_for_server.display().to_string(),
                         "enabled": true,
@@ -3466,6 +3955,7 @@ fn plugin_install_rejects_server_that_drops_source_metadata() {
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -3487,7 +3977,7 @@ command = ["sh", "-c", "echo install"]
         .join("herdr-dev")
         .join("plugins")
         .join("github")
-        .join("example.worktree-bootstrap");
+        .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
     let git_config = base.join("gitconfig");
     fs::write(
         &git_config,
@@ -3530,6 +4020,7 @@ command = ["sh", "-c", "echo install"]
                         "plugin_id": "example.worktree-bootstrap",
                         "name": "Worktree Bootstrap",
                         "version": "0.1.0",
+                        "min_herdr_version": "0.6.10",
                         "manifest_path": managed_checkout_for_server.join("herdr-plugin.toml").display().to_string(),
                         "plugin_root": managed_checkout_for_server.display().to_string(),
                         "enabled": true,
@@ -3601,6 +4092,7 @@ fn plugin_install_keeps_checkout_when_incompatible_server_cleanup_fails() {
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -3622,7 +4114,7 @@ command = ["sh", "-c", "echo install"]
         .join("herdr-dev")
         .join("plugins")
         .join("github")
-        .join("example.worktree-bootstrap");
+        .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
     let git_config = base.join("gitconfig");
     fs::write(
         &git_config,
@@ -3661,6 +4153,7 @@ command = ["sh", "-c", "echo install"]
                         "plugin_id": "example.worktree-bootstrap",
                         "name": "Worktree Bootstrap",
                         "version": "0.1.0",
+                        "min_herdr_version": "0.6.10",
                         "manifest_path": managed_checkout_for_server.join("herdr-plugin.toml").display().to_string(),
                         "plugin_root": managed_checkout_for_server.display().to_string(),
                         "enabled": true,
@@ -3765,6 +4258,48 @@ fn wait_agent_status_exits_immediately_when_status_already_matches() {
     assert_eq!(waited_json["event"], "pane.agent_status_changed");
     assert_eq!(waited_json["data"]["agent_status"], "idle");
     assert_eq!(waited_json["data"]["agent"], "pi");
+
+    cleanup_spawned_herdr(herdr, base);
+}
+
+#[test]
+fn wait_agent_status_times_out_when_status_does_not_match() {
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+
+    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let created = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"req_cli_timeout_1","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            base.display()
+        ),
+    );
+    assert_eq!(created["result"]["type"], "workspace_created");
+
+    let waited = run_cli(
+        &socket_path,
+        &[
+            "wait",
+            "agent-status",
+            "1-1",
+            "--status",
+            "blocked",
+            "--timeout",
+            "100",
+        ],
+    );
+    assert!(!waited.status.success());
+    assert!(
+        String::from_utf8_lossy(&waited.stderr)
+            .contains("timed out waiting for agent status change"),
+        "stderr: {}",
+        String::from_utf8_lossy(&waited.stderr)
+    );
 
     cleanup_spawned_herdr(herdr, base);
 }

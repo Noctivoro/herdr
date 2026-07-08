@@ -226,12 +226,6 @@ impl Tab {
         ))
     }
 
-    pub fn display_name(&self) -> String {
-        self.custom_name
-            .clone()
-            .unwrap_or_else(|| self.number.to_string())
-    }
-
     pub fn is_auto_named(&self) -> bool {
         self.custom_name.is_none()
     }
@@ -463,6 +457,7 @@ impl Tab {
         })
     }
 
+    #[cfg(test)]
     pub fn close_focused(&mut self) -> Option<DetachedPane> {
         let pane_id = self.layout.focused();
         self.detach_pane(pane_id)

@@ -36,6 +36,9 @@ impl App {
                 Err((code, message)) => return encode_error(id, code, message),
             }
         }
+        if let Err(err) = env::ensure_plugin_user_dirs(&plugin) {
+            return encode_error(id, "plugin_user_dir_create_failed", err.to_string());
+        }
         let previous = self.state.installed_plugins.get(&plugin.plugin_id).cloned();
         self.state
             .installed_plugins
@@ -402,7 +405,7 @@ impl App {
             return encode_error(id, "plugin_pane_not_found", "plugin pane not found");
         }
         self.state.focus_pane_in_workspace(ws_idx, pane_id);
-        self.state.mode = crate::app::Mode::Terminal;
+        self.state.settle_terminal_mode_after_focus();
         let Some(record) = self.state.plugin_panes.get(&pane_id).cloned() else {
             return encode_error(id, "plugin_pane_not_found", "plugin pane not found");
         };
@@ -471,7 +474,7 @@ impl App {
                 .actions
                 .iter()
                 .find(|a| a.id == action_id)
-                .map(|a| manifest_action_info(&plugin_id, a))
+                .map(|a| manifest_action_info(&plugin_id, &plugin.platforms, a))
                 .ok_or_else(|| {
                     (
                         "plugin_action_not_found",
@@ -622,7 +625,11 @@ fn plugin_manifest_available(plugin: &InstalledPluginInfo) -> bool {
     })
 }
 
-fn manifest_action_info(plugin_id: &str, action: &PluginManifestAction) -> PluginActionInfo {
+fn manifest_action_info(
+    plugin_id: &str,
+    plugin_platforms: &Option<Vec<crate::api::schema::PluginPlatform>>,
+    action: &PluginManifestAction,
+) -> PluginActionInfo {
     PluginActionInfo {
         plugin_id: plugin_id.to_string(),
         action_id: action.id.clone(),
@@ -630,7 +637,7 @@ fn manifest_action_info(plugin_id: &str, action: &PluginManifestAction) -> Plugi
         description: action.description.clone(),
         contexts: action.contexts.clone(),
         command: action.command.clone(),
-        platforms: action.platforms.clone(),
+        platforms: effective_platforms(&action.platforms, plugin_platforms).clone(),
     }
 }
 
@@ -644,7 +651,7 @@ fn manifest_actions(
             plugin
                 .actions
                 .iter()
-                .map(|action| manifest_action_info(&plugin.plugin_id, action))
+                .map(|action| manifest_action_info(&plugin.plugin_id, &plugin.platforms, action))
         })
 }
 
@@ -688,6 +695,27 @@ mod tests {
             .to_string()
     }
 
+    /// Wait for non-empty contents at `path`. Shell `>` creates the file empty
+    /// before the command writes, so waiting on existence alone can read EOF.
+    /// `pump` advances any event loop the command depends on.
+    fn read_capture_when_ready(path: &std::path::Path, mut pump: impl FnMut()) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            pump();
+            if let Ok(contents) = std::fs::read_to_string(path) {
+                if !contents.is_empty() {
+                    return contents;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "plugin command did not write {} within deadline",
+                path.display()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     fn write_manifest(root: &std::path::Path) -> std::path::PathBuf {
         std::fs::create_dir_all(root).unwrap();
         let manifest = root.join("herdr-plugin.toml");
@@ -697,6 +725,7 @@ mod tests {
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 description = "Prepare new worktrees"
 platforms = ["linux", "macos", "windows"]
 
@@ -749,6 +778,73 @@ action = "bootstrap"
             result.contains("plugin_linked"),
             "expected plugin_linked: {result}"
         );
+    }
+
+    #[test]
+    fn plugin_link_creates_stable_config_and_state_dirs() {
+        let mut app = test_app();
+        let root = unique_temp_path("plugin-link-dirs");
+        let config_dir = super::env::plugin_config_dir("example.config-dirs");
+        let state_dir = super::env::plugin_state_dir("example.config-dirs");
+        let _ = std::fs::remove_dir_all(&config_dir);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        write_manifest_content(
+            &root,
+            r#"
+id = "example.config-dirs"
+name = "Config Dirs"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos", "windows"]
+"#,
+        );
+
+        link_manifest(&mut app, &root);
+
+        assert!(config_dir.is_dir());
+        assert!(state_dir.is_dir());
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(config_dir);
+        let _ = std::fs::remove_dir_all(state_dir);
+    }
+
+    #[test]
+    fn plugin_link_seeds_stable_config_dir_from_legacy_unhashed_dir() {
+        let mut app = test_app();
+        let root = unique_temp_path("plugin-link-legacy-config");
+        let config_dir = super::env::plugin_config_dir("example.legacy-config");
+        let state_dir = super::env::plugin_state_dir("example.legacy-config");
+        let legacy_dir = crate::config::config_dir()
+            .join("plugins")
+            .join("example.legacy-config");
+        let _ = std::fs::remove_dir_all(&config_dir);
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let _ = std::fs::remove_dir_all(&legacy_dir);
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join(".env"), "TELEGRAM_BOT_TOKEN=test\n").unwrap();
+        write_manifest_content(
+            &root,
+            r#"
+id = "example.legacy-config"
+name = "Legacy Config"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos", "windows"]
+"#,
+        );
+
+        link_manifest(&mut app, &root);
+
+        assert_eq!(
+            std::fs::read_to_string(config_dir.join(".env")).unwrap(),
+            "TELEGRAM_BOT_TOKEN=test\n"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(config_dir);
+        let _ = std::fs::remove_dir_all(state_dir);
+        let _ = std::fs::remove_dir_all(legacy_dir);
     }
 
     #[test]
@@ -853,6 +949,56 @@ action = "bootstrap"
     }
 
     #[test]
+    fn link_rejects_invalid_min_herdr_versions() {
+        let cases = [
+            (
+                "plugin-missing-min-herdr",
+                r#"
+id = "example.missing-min-herdr"
+name = "Missing Min Herdr"
+version = "0.1.0"
+platforms = ["linux", "macos", "windows"]
+"#,
+                "invalid_plugin_min_herdr_version",
+            ),
+            (
+                "plugin-invalid-min-herdr",
+                r#"
+id = "example.invalid-min-herdr"
+name = "Invalid Min Herdr"
+version = "0.1.0"
+min_herdr_version = "soon"
+platforms = ["linux", "macos", "windows"]
+"#,
+                "invalid_plugin_min_herdr_version",
+            ),
+            (
+                "plugin-future-min-herdr",
+                r#"
+id = "example.future-min-herdr"
+name = "Future Min Herdr"
+version = "0.1.0"
+min_herdr_version = "999.0.0"
+platforms = ["linux", "macos", "windows"]
+"#,
+                "plugin_requires_newer_herdr",
+            ),
+        ];
+
+        for (name, manifest, expected_code) in cases {
+            let root = unique_temp_path(name);
+            write_manifest_content(&root, manifest);
+
+            let result = load_plugin_manifest(&root.display().to_string(), true);
+            assert!(
+                matches!(result, Err((code, _)) if code == expected_code),
+                "{name}: expected {expected_code}, got {result:?}"
+            );
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
     fn link_rejects_duplicate_action_ids() {
         let root = unique_temp_path("plugin-duplicate-action");
         write_manifest_content(
@@ -861,6 +1007,7 @@ action = "bootstrap"
 id = "example.duplicate"
 name = "Duplicate"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -889,6 +1036,7 @@ command = ["echo", "b"]
 id = "example.dotted-action"
 name = "Dotted Action"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -912,6 +1060,7 @@ command = ["echo", "build"]
 id = "example.duplicate-pane"
 name = "Duplicate Pane"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[panes]]
@@ -1027,6 +1176,7 @@ command = ["echo", "b"]
 id = "example.pane"
 name = "Pane Plugin"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[panes]]
@@ -1078,11 +1228,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \"$HERDR_
         };
         assert!(app.state.plugin_panes.contains_key(&opened_pane_id));
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !capture.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let text = std::fs::read_to_string(&capture).expect("plugin pane command should write env");
+        let text = read_capture_when_ready(&capture, || {});
         let mut lines = text.lines();
         assert_eq!(lines.next(), Some(canonical_path_string(&root).as_str()));
         assert_eq!(lines.next(), Some("example.pane"));
@@ -1133,6 +1279,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \"$HERDR_
 id = "example.path-env"
 name = "Path Env"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[panes]]
@@ -1176,11 +1323,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
             panic!("expected plugin pane opened response: {open}");
         };
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !capture.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let text = std::fs::read_to_string(&capture).expect("plugin pane command should write env");
+        let text = read_capture_when_ready(&capture, || {});
         let mut lines = text.lines();
         assert_eq!(lines.next(), Some(canonical_path_string(&root).as_str()));
         assert_eq!(
@@ -1188,9 +1331,8 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
             Some(
                 crate::config::config_dir()
                     .join("plugins")
-                    .join(crate::api::schema::plugin_managed_path_component(
-                        "example.path-env"
-                    ))
+                    .join("config")
+                    .join("example.path-env")
                     .display()
                     .to_string()
                     .as_str()
@@ -1201,9 +1343,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
             Some(
                 crate::config::state_dir()
                     .join("plugins")
-                    .join(crate::api::schema::plugin_managed_path_component(
-                        "example.path-env"
-                    ))
+                    .join("example.path-env")
                     .display()
                     .to_string()
                     .as_str()
@@ -1241,6 +1381,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
 id = "example.tab"
 name = "Tab Plugin"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[panes]]
@@ -1283,7 +1424,166 @@ command = ["sh", "-c", "sleep 1"]
             .iter()
             .position(|event| *event == crate::api::schema::EventKind::PaneCreated)
             .expect("pane.created should be emitted");
+        let layout_updated = events
+            .iter()
+            .position(|event| *event == crate::api::schema::EventKind::LayoutUpdated)
+            .expect("layout.updated should be emitted");
         assert!(tab_created < pane_created);
+        assert!(pane_created < layout_updated);
+
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn plugin_pane_open_zoomed_split_emits_layout_updated() {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            event_hub.clone(),
+        );
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("plugin-split")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = crate::app::Mode::Terminal;
+
+        let root = unique_temp_path("plugin-pane-split-layout-event");
+        write_manifest_content(
+            &root,
+            r#"
+id = "example.split"
+name = "Split Plugin"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "board"
+title = "Plugin Board"
+placement = "split"
+command = ["sh", "-c", "sleep 1"]
+"#,
+        );
+        link_manifest(&mut app, &root);
+
+        let open = app.handle_api_request(Request {
+            id: "pane-open-split".into(),
+            method: Method::PluginPaneOpen(PluginPaneOpenParams {
+                plugin_id: "example.split".into(),
+                entrypoint: "board".into(),
+                placement: Some(PluginPanePlacement::Zoomed),
+                workspace_id: None,
+                target_pane_id: None,
+                direction: Some(crate::api::schema::SplitDirection::Right),
+                cwd: None,
+                focus: true,
+                env: std::collections::HashMap::new(),
+            }),
+        });
+        let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
+            panic!("expected plugin pane opened response: {open}");
+        };
+
+        let events = event_hub.events_after(0);
+        let pane_created = events
+            .iter()
+            .position(|(_, event)| event.event == crate::api::schema::EventKind::PaneCreated)
+            .expect("pane.created should be emitted");
+        let layout_updated = events
+            .iter()
+            .position(|(_, event)| event.event == crate::api::schema::EventKind::LayoutUpdated)
+            .expect("layout.updated should be emitted");
+        assert!(pane_created < layout_updated);
+        assert!(matches!(
+            &events[layout_updated].1.data,
+            crate::api::schema::EventData::LayoutUpdated { layout }
+                if layout.zoomed && layout.panes.len() == 2
+        ));
+
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn plugin_pane_open_overlay_emits_layout_updated() {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            event_hub.clone(),
+        );
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("plugin-overlay")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = crate::app::Mode::Terminal;
+
+        let root = unique_temp_path("plugin-pane-overlay-layout-event");
+        write_manifest_content(
+            &root,
+            r#"
+id = "example.overlay"
+name = "Overlay Plugin"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "board"
+title = "Plugin Board"
+placement = "overlay"
+command = ["sh", "-c", "sleep 1"]
+"#,
+        );
+        link_manifest(&mut app, &root);
+
+        let open = app.handle_api_request(Request {
+            id: "pane-open-overlay".into(),
+            method: Method::PluginPaneOpen(PluginPaneOpenParams {
+                plugin_id: "example.overlay".into(),
+                entrypoint: "board".into(),
+                placement: None,
+                workspace_id: None,
+                target_pane_id: None,
+                direction: None,
+                cwd: None,
+                focus: true,
+                env: std::collections::HashMap::new(),
+            }),
+        });
+        let ResponseResult::PluginPaneOpened { .. } = response_result(&open) else {
+            panic!("expected plugin pane opened response: {open}");
+        };
+
+        let events = event_hub.events_after(0);
+        let pane_created = events
+            .iter()
+            .position(|(_, event)| event.event == crate::api::schema::EventKind::PaneCreated)
+            .expect("pane.created should be emitted");
+        let layout_updated = events
+            .iter()
+            .position(|(_, event)| event.event == crate::api::schema::EventKind::LayoutUpdated)
+            .expect("layout.updated should be emitted");
+        assert!(pane_created < layout_updated);
+        assert!(matches!(
+            &events[layout_updated].1.data,
+            crate::api::schema::EventData::LayoutUpdated { layout }
+                if layout.zoomed && layout.panes.len() == 2
+        ));
 
         for (_, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();
@@ -1311,6 +1611,14 @@ command = ["sh", "-c", "sleep 1"]
             "example.worktree-bootstrap.bootstrap"
         );
         assert_eq!(actions[0].command, ["bun", "run", "bootstrap.ts"]);
+        assert_eq!(
+            actions[0].platforms,
+            Some(vec![
+                crate::api::schema::PluginPlatform::Linux,
+                crate::api::schema::PluginPlatform::Macos,
+                crate::api::schema::PluginPlatform::Windows,
+            ])
+        );
 
         let invoke = app.handle_api_request(Request {
             id: "invoke".into(),
@@ -1437,6 +1745,7 @@ command = ["sh", "-c", "sleep 1"]
 id = "example.runner"
 name = "Runner"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -1503,6 +1812,7 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_ACTION_ID\""]
 id = "example.action-paths"
 name = "Action Paths"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -1558,9 +1868,8 @@ command = ["sh", "-c", "printf '%s\n%s\n%s' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PLUG
             Some(
                 crate::config::config_dir()
                     .join("plugins")
-                    .join(crate::api::schema::plugin_managed_path_component(
-                        "example.action-paths"
-                    ))
+                    .join("config")
+                    .join("example.action-paths")
                     .display()
                     .to_string()
                     .as_str()
@@ -1571,9 +1880,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PLUG
             Some(
                 crate::config::state_dir()
                     .join("plugins")
-                    .join(crate::api::schema::plugin_managed_path_component(
-                        "example.action-paths"
-                    ))
+                    .join("example.action-paths")
                     .display()
                     .to_string()
                     .as_str()
@@ -1628,6 +1935,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PLUG
 id = "example.event-context"
 name = "Event Context"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[events]]
@@ -1656,13 +1964,11 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
             },
         });
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !capture.exists() && std::time::Instant::now() < deadline {
-            app.drain_all_internal_events();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
         let context: PluginInvocationContext =
-            serde_json::from_str(&std::fs::read_to_string(&capture).unwrap()).unwrap();
+            serde_json::from_str(&read_capture_when_ready(&capture, || {
+                app.drain_all_internal_events();
+            }))
+            .unwrap();
         assert_eq!(
             context.workspace_id.as_deref(),
             Some(target_workspace.workspace_id.as_str())
@@ -1759,6 +2065,76 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
             pane_context.focused_pane_id.as_deref(),
             Some(active_public_pane_id.as_str())
         );
+
+        app.state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
+            key: "repo-key".into(),
+            label: "herdr".into(),
+            repo_root: "/repo/herdr".into(),
+            checkout_path: "/repo/herdr-issue".into(),
+            is_linked_worktree: true,
+        });
+        let workspace = app.workspace_info(0);
+        let worktree = crate::api::schema::WorktreeInfo {
+            path: "/repo/herdr-issue".into(),
+            branch: Some("worktree/issue".into()),
+            is_bare: false,
+            is_detached: false,
+            is_prunable: false,
+            is_linked_worktree: true,
+            open_workspace_id: None,
+            label: "herdr".into(),
+        };
+        app.state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
+            key: "repo-key".into(),
+            label: "herdr".into(),
+            repo_root: "/repo/herdr".into(),
+            checkout_path: "/repo/herdr-other".into(),
+            is_linked_worktree: true,
+        });
+        let changed_context = app.plugin_context_for_event(
+            &crate::api::schema::EventEnvelope {
+                event: crate::api::schema::EventKind::WorktreeRemoved,
+                data: crate::api::schema::EventData::WorktreeRemoved {
+                    workspace_id: workspace_id.clone(),
+                    workspace: Some(workspace.clone()),
+                    worktree: worktree.clone(),
+                    forced: true,
+                },
+            },
+            "worktree.removed",
+        );
+        assert_eq!(
+            changed_context
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.checkout_path.as_str()),
+            Some("/repo/herdr-issue")
+        );
+
+        app.state.workspaces.clear();
+        let removed_context = app.plugin_context_for_event(
+            &crate::api::schema::EventEnvelope {
+                event: crate::api::schema::EventKind::WorktreeRemoved,
+                data: crate::api::schema::EventData::WorktreeRemoved {
+                    workspace_id: workspace_id.clone(),
+                    workspace: Some(workspace),
+                    worktree,
+                    forced: true,
+                },
+            },
+            "worktree.removed",
+        );
+        assert_eq!(
+            removed_context.workspace_id.as_deref(),
+            Some(workspace_id.as_str())
+        );
+        assert_eq!(
+            removed_context
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.checkout_path.as_str()),
+            Some("/repo/herdr-issue")
+        );
     }
 
     #[cfg(unix)]
@@ -1777,6 +2153,7 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > {}"]
 id = "example.links"
 name = "Links"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -1844,6 +2221,7 @@ action = "open"
 id = "example.link-order"
 name = "Link Order"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -1890,6 +2268,7 @@ action = "generic"
 id = "example.bad-links"
 name = "Bad Links"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -1932,6 +2311,7 @@ action = "open"
 id = "example.bad-link-action"
 name = "Bad Link Action"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -2005,6 +2385,7 @@ action = "missing"
 id = "example.context"
 name = "Context"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 
 [[actions]]
 id = "show"
@@ -2101,6 +2482,7 @@ command = ["show-ctx"]
 id = "example.bad-event"
 name = "Bad Event Plugin"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 
 [[events]]
 on = "worktree.craeted"
@@ -2384,6 +2766,7 @@ command = ["sh", "-c", "echo ok"]
 id = "example.platforms"
 name = "Platforms"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[actions]]
@@ -2466,6 +2849,7 @@ command = ["run.bat"]
 id = "example.reject"
 name = "Reject"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 {excluded_platforms}
 
 [[actions]]
@@ -2530,6 +2914,7 @@ command = ["act"]
 id = "example.override"
 name = "Override"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[actions]]
@@ -2580,6 +2965,7 @@ command = ["act"]
 id = "example.nodecl"
 name = "No Decl"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 
 [[actions]]
 id = "act"
@@ -2637,6 +3023,7 @@ command = ["act"]
 id = "example.badplatform"
 name = "Bad Platform"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "beos"]
 
 [[actions]]
@@ -2668,6 +3055,7 @@ command = ["act"]
 id = "example.platform-rt"
 name = "Platform RT"
 version = "0.1.0"
+min_herdr_version = "0.6.10"
 platforms = ["linux", "macos"]
 
 [[actions]]

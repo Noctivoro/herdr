@@ -291,33 +291,72 @@ fn detection_uses_cached_manifest_until_explicit_reload() {
 
 #[test]
 fn all_bundled_manifests_parse_and_validate() {
-    let agents = [
-        Agent::Pi,
-        Agent::Claude,
-        Agent::Codex,
-        Agent::Gemini,
-        Agent::Cursor,
-        Agent::Antigravity,
-        Agent::Cline,
-        Agent::OpenCode,
-        Agent::GithubCopilot,
-        Agent::Kimi,
-        Agent::Kiro,
-        Agent::Droid,
-        Agent::Amp,
-        Agent::Grok,
-        Agent::Hermes,
-        Agent::Kilo,
-        Agent::Qodercli,
-    ];
-
-    for agent in agents {
+    for agent in Agent::SCREEN_MANIFEST_AGENTS {
         assert!(
             bundled_manifest(agent).is_some(),
             "missing bundled manifest for {}",
             agent_label(agent)
         );
     }
+}
+
+#[test]
+fn devin_manifest_detects_idle_working_and_blocked_states() {
+    let idle = explain(
+        Agent::Devin,
+        "─────────────────────────────────────────────────────\n❭ Ask Devin to build features, fix bugs, or work on\n  your code\n─────────────────────────────────────────────────────\nSWE-1.6               Context: 16k / 200k tokens (7%)",
+    );
+    assert_eq!(idle.state, AgentState::Idle);
+    assert!(idle.visible_idle);
+
+    let live_footer_idle = explain(
+        Agent::Devin,
+        "Done.\n\n────────────────────────────────────────────────── (bypass permissions on) ─\n❭\n────────────────────────────────────────────────────────────────────────────\nClaude Opus 4.6 Thinking                                    Context: 38k / 200k tokens (18%)",
+    );
+    assert_eq!(live_footer_idle.state, AgentState::Idle);
+    assert_eq!(
+        live_footer_idle
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("live_prompt_footer")
+    );
+    assert!(live_footer_idle.visible_idle);
+
+    let welcome_footer_idle = explain(
+        Agent::Devin,
+        "⠀⠀⠀⠀⠀⣴⣾⣶⡄⠀⠀⠀⠀\n⠀⣴⣾⣶⡾⠛⠿⠟⠃⣴⣾⣶⡄  Devin CLI\n⠀⠛⠿⠟⠃⣴⣾⣶⡾⠛⠿⠟⠃  v2026.5.26-8\n⠀⣤⣶⣦⡄⠻⢿⠿⢷⣤⣶⣦⡄\n⠀⠻⢿⠿⢷⣤⣶⣦⡄⠻⢿⠿⠃  Hybrid\n⠀⠀⠀⠀⠀⠻⢿⠿⠃⠀⠀⠀⠀\n\n───────────────────────────\n❭ Ask Devin to build\n  features, fix bugs, or\n  work on your code\n───────────────────────────\nClaude Opus Looking for\n4.6 Thinkingplan mode? /\n            plan",
+    );
+    assert_eq!(welcome_footer_idle.state, AgentState::Idle);
+    assert_eq!(
+        welcome_footer_idle
+            .matched_rule
+            .as_ref()
+            .map(|rule| rule.id.as_str()),
+        Some("welcome_prompt_footer")
+    );
+    assert!(welcome_footer_idle.visible_idle);
+
+    let working = explain(
+        Agent::Devin,
+        "◔ Reading shell 91b655\n  │ Timeout: 35s\n\n⠀⡆ Running tools · 27s (esc to interrupt)\n─────────────────────────────────────────────────────\n❭ Guide Devin while it works",
+    );
+    assert_eq!(working.state, AgentState::Working);
+    assert!(working.visible_working);
+
+    let trust_prompt = explain(
+        Agent::Devin,
+        "Do you trust the authors of this directory?\nFor security, devin should not be run in directories\nwith untrusted content.\n❭ 1 Yes, trust /private/tmp/devin-hook-probe\n· 2 No, exit",
+    );
+    assert_eq!(trust_prompt.state, AgentState::Blocked);
+    assert!(trust_prompt.visible_blocker);
+
+    let permission_prompt = explain(
+        Agent::Devin,
+        "⏺ Running command\n  └ $ sleep 30\n\n❭ 1 Yes  (Approve once)\n· 2 Yes, allow `sleep` commands\n· 3 Yes, always allow `sleep` commands\n· 4 No\n↑↓ select · ↵ confirm · esc cancel",
+    );
+    assert_eq!(permission_prompt.state, AgentState::Blocked);
+    assert!(permission_prompt.visible_blocker);
 }
 
 #[test]
