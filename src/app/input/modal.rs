@@ -749,14 +749,7 @@ pub(super) fn apply_context_menu_action(
         }
         (ContextMenuKind::Tab { ws_idx, tab_idx }, Some(item)) => {
             if let Some(color) = crate::workspace::TabColor::from_menu_label(item) {
-                if let Some(tab) = state
-                    .workspaces
-                    .get_mut(ws_idx)
-                    .and_then(|ws| ws.tabs.get_mut(tab_idx))
-                {
-                    tab.color = Some(color);
-                    state.mark_session_dirty();
-                }
+                toggle_tab_color(state, ws_idx, tab_idx, color);
                 state.mode = Mode::Terminal;
             } else {
                 leave_modal(state);
@@ -1171,6 +1164,14 @@ impl App {
                     leave_modal(&mut self.state);
                 }
             }
+            (ContextMenuKind::Tab { ws_idx, tab_idx }, Some(item)) => {
+                if let Some(color) = crate::workspace::TabColor::from_menu_label(item) {
+                    toggle_tab_color(&mut self.state, ws_idx, tab_idx, color);
+                    self.state.mode = Mode::Terminal;
+                } else {
+                    leave_modal(&mut self.state);
+                }
+            }
             (ContextMenuKind::Pane { pane_id, .. }, Some("Rename pane")) => {
                 open_rename_pane(&mut self.state, pane_id);
             }
@@ -1265,6 +1266,26 @@ impl App {
             }
             _ => leave_modal(&mut self.state),
         }
+    }
+}
+
+fn toggle_tab_color(
+    state: &mut AppState,
+    ws_idx: usize,
+    tab_idx: usize,
+    color: crate::workspace::TabColor,
+) {
+    if let Some(tab) = state
+        .workspaces
+        .get_mut(ws_idx)
+        .and_then(|ws| ws.tabs.get_mut(tab_idx))
+    {
+        tab.color = if tab.color == Some(color) {
+            None
+        } else {
+            Some(color)
+        };
+        state.mark_session_dirty();
     }
 }
 
@@ -1931,6 +1952,112 @@ mod tests {
             Some(crate::workspace::TabColor::Green)
         );
         assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn tab_context_menu_color_item_toggles_active_color_off() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.workspaces[0].test_add_tab(Some("logs"));
+        state.workspaces[0].tabs[1].color = Some(crate::workspace::TabColor::Green);
+        state.workspaces[0].active_tab = 0;
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Tab {
+                ws_idx: 0,
+                tab_idx: 1,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        let idx = menu
+            .items()
+            .iter()
+            .position(|item| *item == crate::workspace::TabColor::GREEN_MENU_LABEL)
+            .expect("green tab color item");
+        let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
+
+        apply_context_menu_action(&mut state, &mut terminal_runtimes, menu, idx);
+
+        assert_eq!(state.workspaces[0].active_tab, 0);
+        assert_eq!(state.workspaces[0].tabs[1].color, None);
+        assert_eq!(state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn api_tab_context_menu_color_items_apply_and_toggle_without_switching() {
+        let mut app = app_with_test_workspaces(&["test"]);
+        app.state.workspaces[0].test_add_tab(Some("logs"));
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.workspaces[0].active_tab = 0;
+        app.state.mode = Mode::ContextMenu;
+
+        let green_menu = ContextMenuState {
+            kind: ContextMenuKind::Tab {
+                ws_idx: 0,
+                tab_idx: 1,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        let green_idx = green_menu
+            .items()
+            .iter()
+            .position(|item| *item == crate::workspace::TabColor::GREEN_MENU_LABEL)
+            .expect("green tab color item");
+
+        app.apply_context_menu_action_via_api(green_menu, green_idx);
+
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert_eq!(
+            app.state.workspaces[0].tabs[1].color,
+            Some(crate::workspace::TabColor::Green)
+        );
+        assert_eq!(app.state.mode, Mode::Terminal);
+
+        let purple_menu = ContextMenuState {
+            kind: ContextMenuKind::Tab {
+                ws_idx: 0,
+                tab_idx: 1,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        let purple_idx = purple_menu
+            .items()
+            .iter()
+            .position(|item| *item == crate::workspace::TabColor::PURPLE_MENU_LABEL)
+            .expect("purple tab color item");
+
+        app.apply_context_menu_action_via_api(purple_menu, purple_idx);
+
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert_eq!(
+            app.state.workspaces[0].tabs[1].color,
+            Some(crate::workspace::TabColor::Purple)
+        );
+
+        let toggle_menu = ContextMenuState {
+            kind: ContextMenuKind::Tab {
+                ws_idx: 0,
+                tab_idx: 1,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+        };
+        let toggle_idx = toggle_menu
+            .items()
+            .iter()
+            .position(|item| *item == crate::workspace::TabColor::PURPLE_MENU_LABEL)
+            .expect("purple tab color item");
+
+        app.apply_context_menu_action_via_api(toggle_menu, toggle_idx);
+
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert_eq!(app.state.workspaces[0].tabs[1].color, None);
     }
 
     #[test]
